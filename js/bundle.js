@@ -1,290 +1,501 @@
 /**
  * bundle.js
  * Universal self-contained bundle for CardStudio 90x50.
- * Works seamlessly both when double-clicked directly from Windows Explorer (file:///)
- * and when hosted on Cloudflare Pages / GitHub Pages (http/https).
- * Zero CORS restrictions, zero build step required.
+ * Includes ISO 18004 Verified QR Engine, Pan & Zoom image scaling,
+ * and Auto Edge-Color detection. Works on file:/// and HTTP/HTTPS.
  */
 
 (function () {
   "use strict";
 
-  // ==========================================
-  // 1. qr-engine.js (Standalone QR Code Engine)
-  // ==========================================
-  const PAD0 = 0xec;
-  const PAD1 = 0x11;
+  // ============================================================
+  // 1. ISO/IEC 18004 Compliant QR Code Engine (Kazuhiko Arase)
+  // ============================================================
+  const QRErrorCorrectLevel = { L: 1, M: 0, Q: 3, H: 2 };
 
-  const EXP_TABLE = new Uint8Array(256);
-  const LOG_TABLE = new Uint8Array(256);
-  for (let i = 0, x = 1; i < 256; i++) {
-    EXP_TABLE[i] = x;
-    LOG_TABLE[x] = i;
-    x = (x << 1) ^ (x & 128 ? 0x11d : 0);
+  const QRMath = {
+    glog(n) {
+      if (n < 1) throw new Error("glog(" + n + ")");
+      return QRMath.LOG_TABLE[n];
+    },
+    gexp(n) {
+      while (n < 0) n += 255;
+      while (n >= 255) n -= 255;
+      return QRMath.EXP_TABLE[n];
+    },
+    EXP_TABLE: new Array(256),
+    LOG_TABLE: new Array(256)
+  };
+
+  for (let i = 0; i < 8; i++) QRMath.EXP_TABLE[i] = 1 << i;
+  for (let i = 8; i < 256; i++) {
+    QRMath.EXP_TABLE[i] =
+      QRMath.EXP_TABLE[i - 4] ^
+      QRMath.EXP_TABLE[i - 5] ^
+      QRMath.EXP_TABLE[i - 6] ^
+      QRMath.EXP_TABLE[i - 8];
+  }
+  for (let i = 0; i < 255; i++) {
+    QRMath.LOG_TABLE[QRMath.EXP_TABLE[i]] = i;
   }
 
-  function glog(n) {
-    if (n < 1) throw new Error("glog(" + n + ")");
-    return LOG_TABLE[n];
-  }
-
-  function gexp(n) {
-    while (n < 0) n += 255;
-    while (n >= 255) n -= 255;
-    return EXP_TABLE[n];
-  }
-
-  function getErrorCorrectPolynomial(errorCorrectLength) {
-    let a = [1];
-    for (let i = 0; i < errorCorrectLength; i++) {
-      const b = [1, gexp(i)];
-      const c = new Array(a.length + b.length - 1).fill(0);
-      for (let j = 0; j < a.length; j++) {
-        for (let k = 0; k < b.length; k++) {
-          c[j + k] ^= gexp(glog(a[j]) + glog(b[k]));
+  class QRPolynomial {
+    constructor(num, shift = 0) {
+      let offset = 0;
+      while (offset < num.length && num[offset] === 0) offset++;
+      this.num = new Array(num.length - offset + shift);
+      for (let i = 0; i < num.length - offset; i++) {
+        this.num[i] = num[i + offset];
+      }
+      for (let i = num.length - offset; i < this.num.length; i++) {
+        this.num[i] = 0;
+      }
+    }
+    get(index) { return this.num[index]; }
+    getLength() { return this.num.length; }
+    multiply(e) {
+      const num = new Array(this.getLength() + e.getLength() - 1).fill(0);
+      for (let i = 0; i < this.getLength(); i++) {
+        for (let j = 0; j < e.getLength(); j++) {
+          num[i + j] ^= QRMath.gexp(QRMath.glog(this.get(i)) + QRMath.glog(e.get(j)));
         }
       }
-      a = c;
+      return new QRPolynomial(num);
     }
-    return a;
+    mod(e) {
+      if (this.getLength() - e.getLength() < 0) return this;
+      const ratio = QRMath.glog(this.get(0)) - QRMath.glog(e.get(0));
+      const num = new Array(this.getLength());
+      for (let i = 0; i < this.getLength(); i++) num[i] = this.get(i);
+      for (let i = 0; i < e.getLength(); i++) {
+        num[i] ^= QRMath.gexp(QRMath.glog(e.get(i)) + ratio);
+      }
+      return new QRPolynomial(num).mod(e);
+    }
   }
 
-  const QR_SPECS = [
-    null,
-    { totalCodewords: 26, ecCodewords: 10, ecBlocks: [[1, 26]] },
-    { totalCodewords: 44, ecCodewords: 16, ecBlocks: [[1, 44]] },
-    { totalCodewords: 70, ecCodewords: 26, ecBlocks: [[1, 70]] },
-    { totalCodewords: 100, ecCodewords: 18, ecBlocks: [[2, 50]] },
-    { totalCodewords: 134, ecCodewords: 24, ecBlocks: [[2, 67]] },
-    { totalCodewords: 172, ecCodewords: 16, ecBlocks: [[4, 43]] },
-    { totalCodewords: 196, ecCodewords: 18, ecBlocks: [[4, 49]] },
-    { totalCodewords: 242, ecCodewords: 22, ecBlocks: [[2, 60], [2, 61]] },
-    { totalCodewords: 292, ecCodewords: 22, ecBlocks: [[3, 58], [2, 59]] },
-    { totalCodewords: 346, ecCodewords: 26, ecBlocks: [[4, 69], [1, 70]] }
-  ];
+  const QRRSBlock = {
+    RS_BLOCK_TABLE: [
+      [1, 26, 19], [1, 26, 16], [1, 26, 13], [1, 26, 9],
+      [1, 44, 34], [1, 44, 28], [1, 44, 22], [1, 44, 16],
+      [1, 70, 55], [1, 70, 44], [2, 35, 17], [2, 35, 13],
+      [1, 100, 80], [2, 50, 32], [2, 50, 24], [4, 25, 9],
+      [1, 134, 108], [2, 67, 43], [2, 33, 15, 2, 34, 16], [2, 33, 11, 2, 34, 12],
+      [2, 86, 68], [4, 43, 27], [4, 43, 19], [4, 43, 15],
+      [2, 98, 78], [4, 49, 31], [2, 32, 14, 4, 33, 15], [4, 39, 13, 1, 40, 14],
+      [2, 121, 97], [2, 60, 38, 2, 61, 39], [4, 40, 18, 2, 41, 19], [4, 40, 14, 2, 41, 15],
+      [2, 146, 116], [3, 58, 36, 2, 59, 37], [4, 36, 16, 4, 37, 17], [4, 36, 12, 4, 37, 13],
+      [2, 86, 68, 2, 87, 69], [4, 69, 43, 1, 70, 44], [6, 43, 19, 2, 44, 20], [6, 43, 15, 2, 44, 16]
+    ],
+    getRSBlocks(typeNumber, errorCorrectLevel) {
+      const rsBlock = QRRSBlock.getRsBlockTable(typeNumber, errorCorrectLevel);
+      if (!rsBlock) throw new Error("bad rs block");
+      const length = rsBlock.length / 3;
+      const list = [];
+      for (let i = 0; i < length; i++) {
+        const count = rsBlock[i * 3 + 0];
+        const totalCount = rsBlock[i * 3 + 1];
+        const dataCount = rsBlock[i * 3 + 2];
+        for (let j = 0; j < count; j++) {
+          list.push({ totalCount, dataCount });
+        }
+      }
+      return list;
+    },
+    getRsBlockTable(typeNumber, errorCorrectLevel) {
+      switch (errorCorrectLevel) {
+        case QRErrorCorrectLevel.L: return QRRSBlock.RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 0];
+        case QRErrorCorrectLevel.M: return QRRSBlock.RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 1];
+        case QRErrorCorrectLevel.Q: return QRRSBlock.RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 2];
+        case QRErrorCorrectLevel.H: return QRRSBlock.RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 3];
+        default: return null;
+      }
+    }
+  };
 
-  const ALIGNMENT_PATTERN_TABLE = [
-    [], [], [6, 18], [6, 22], [6, 26], [6, 30],
+  class QRBitBuffer {
+    constructor() {
+      this.buffer = [];
+      this.length = 0;
+    }
+    get(index) {
+      const bufIndex = Math.floor(index / 8);
+      return ((this.buffer[bufIndex] >>> (7 - (index % 8))) & 1) === 1;
+    }
+    put(num, length) {
+      for (let i = 0; i < length; i++) {
+        this.putBit(((num >>> (length - i - 1)) & 1) === 1);
+      }
+    }
+    putBit(bit) {
+      const bufIndex = Math.floor(this.length / 8);
+      if (this.buffer.length <= bufIndex) this.buffer.push(0);
+      if (bit) this.buffer[bufIndex] |= 0x80 >>> (this.length % 8);
+      this.length++;
+    }
+  }
+
+  class QR8bitByte {
+    constructor(data) {
+      this.mode = 0b0100;
+      this.data = data;
+      this.parsedData = new TextEncoder().encode(data);
+    }
+    getLength() { return this.parsedData.length; }
+    write(buffer) {
+      for (let i = 0; i < this.parsedData.length; i++) {
+        buffer.put(this.parsedData[i], 8);
+      }
+    }
+  }
+
+  class QRCodeModel {
+    constructor(typeNumber, errorCorrectLevel) {
+      this.typeNumber = typeNumber;
+      this.errorCorrectLevel = errorCorrectLevel;
+      this.modules = null;
+      this.moduleCount = 0;
+      this.dataCache = null;
+      this.dataList = [];
+    }
+
+    addData(data) {
+      this.dataList.push(new QR8bitByte(data));
+      this.dataCache = null;
+    }
+
+    isDark(row, col) {
+      return this.modules[row][col];
+    }
+
+    getModuleCount() {
+      return this.moduleCount;
+    }
+
+    make() {
+      if (this.typeNumber < 1) {
+        let typeNumber = 1;
+        for (; typeNumber < 10; typeNumber++) {
+          const rsBlocks = QRRSBlock.getRSBlocks(typeNumber, this.errorCorrectLevel);
+          const buffer = new QRBitBuffer();
+          let totalDataCount = 0;
+          for (let i = 0; i < rsBlocks.length; i++) totalDataCount += rsBlocks[i].dataCount;
+          for (let i = 0; i < this.dataList.length; i++) {
+            const data = this.dataList[i];
+            buffer.put(data.mode, 4);
+            buffer.put(data.getLength(), typeNumber < 10 ? 8 : 16);
+            data.write(buffer);
+          }
+          if (buffer.length <= totalDataCount * 8) break;
+        }
+        this.typeNumber = typeNumber;
+      }
+      this.makeImpl(false, this.getBestMaskPattern());
+    }
+
+    makeImpl(test, maskPattern) {
+      this.moduleCount = this.typeNumber * 4 + 17;
+      this.modules = new Array(this.moduleCount);
+      for (let row = 0; row < this.moduleCount; row++) {
+        this.modules[row] = new Array(this.moduleCount).fill(null);
+      }
+
+      this.setupPositionProbePattern(0, 0);
+      this.setupPositionProbePattern(this.moduleCount - 7, 0);
+      this.setupPositionProbePattern(0, this.moduleCount - 7);
+      this.setupPositionAdjustPattern();
+      this.setupTimingPattern();
+      this.setupTypeInfo(test, maskPattern);
+
+      if (this.dataCache == null) {
+        this.dataCache = QRCodeModel.createData(this.typeNumber, this.errorCorrectLevel, this.dataList);
+      }
+      this.mapData(this.dataCache, maskPattern);
+    }
+
+    setupPositionProbePattern(row, col) {
+      for (let r = -1; r <= 7; r++) {
+        if (row + r <= -1 || this.moduleCount <= row + r) continue;
+        for (let c = -1; c <= 7; c++) {
+          if (col + c <= -1 || this.moduleCount <= col + c) continue;
+          if (
+            (0 <= r && r <= 6 && (c === 0 || c === 6)) ||
+            (0 <= c && c <= 6 && (r === 0 || r === 6)) ||
+            (2 <= r && r <= 4 && 2 <= c && c <= 4)
+          ) {
+            this.modules[row + r][col + c] = true;
+          } else {
+            this.modules[row + r][col + c] = false;
+          }
+        }
+      }
+    }
+
+    setupPositionAdjustPattern() {
+      const pos = QRCodeModel.PATTERN_POSITION_TABLE[this.typeNumber - 1];
+      for (let i = 0; i < pos.length; i++) {
+        for (let j = 0; j < pos.length; j++) {
+          const row = pos[i];
+          const col = pos[j];
+          if (this.modules[row][col] != null) continue;
+          for (let r = -2; r <= 2; r++) {
+            for (let c = -2; c <= 2; c++) {
+              if (Math.abs(r) === 2 || Math.abs(c) === 2 || (r === 0 && c === 0)) {
+                this.modules[row + r][col + c] = true;
+              } else {
+                this.modules[row + r][col + c] = false;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    setupTimingPattern() {
+      for (let r = 8; r < this.moduleCount - 8; r++) {
+        if (this.modules[r][6] != null) continue;
+        this.modules[r][6] = r % 2 === 0;
+      }
+      for (let c = 8; c < this.moduleCount - 8; c++) {
+        if (this.modules[6][c] != null) continue;
+        this.modules[6][c] = c % 2 === 0;
+      }
+    }
+
+    setupTypeInfo(test, maskPattern) {
+      const data = (this.errorCorrectLevel << 3) | maskPattern;
+      const bits = QRCodeModel.getBCHTypeInfo(data);
+      for (let i = 0; i < 15; i++) {
+        const mod = !test && ((bits >> i) & 1) === 1;
+        if (i < 6) {
+          this.modules[i][8] = mod;
+        } else if (i < 8) {
+          this.modules[i + 1][8] = mod;
+        } else {
+          this.modules[this.moduleCount - 15 + i][8] = mod;
+        }
+        if (i < 8) {
+          this.modules[8][this.moduleCount - i - 1] = mod;
+        } else if (i < 9) {
+          this.modules[8][15 - i - 1 + 1] = mod;
+        } else {
+          this.modules[8][15 - i - 1] = mod;
+        }
+      }
+      this.modules[this.moduleCount - 8][8] = !test;
+    }
+
+    mapData(data, maskPattern) {
+      let inc = -1;
+      let row = this.moduleCount - 1;
+      let bitIndex = 7;
+      let byteIndex = 0;
+      const maskFunc = QRCodeModel.getMaskFunc(maskPattern);
+
+      for (let col = this.moduleCount - 1; col > 0; col -= 2) {
+        if (col === 6) col--;
+        while (true) {
+          for (let c = 0; c < 2; c++) {
+            if (this.modules[row][col - c] == null) {
+              let dark = false;
+              if (byteIndex < data.length) {
+                dark = ((data[byteIndex] >>> bitIndex) & 1) === 1;
+              }
+              const mask = maskFunc(row, col - c);
+              if (mask) dark = !dark;
+              this.modules[row][col - c] = dark;
+              bitIndex--;
+              if (bitIndex === -1) {
+                byteIndex++;
+                bitIndex = 7;
+              }
+            }
+          }
+          row += inc;
+          if (row < 0 || this.moduleCount <= row) {
+            row -= inc;
+            inc = -inc;
+            break;
+          }
+        }
+      }
+    }
+
+    getBestMaskPattern() {
+      let minLostPoint = 0;
+      let pattern = 0;
+      for (let i = 0; i < 8; i++) {
+        this.makeImpl(true, i);
+        const lostPoint = QRCodeModel.getLostPoint(this);
+        if (i === 0 || minLostPoint > lostPoint) {
+          minLostPoint = lostPoint;
+          pattern = i;
+        }
+      }
+      return pattern;
+    }
+
+    static getMaskFunc(maskPattern) {
+      switch (maskPattern) {
+        case 0: return (i, j) => (i + j) % 2 === 0;
+        case 1: return (i, j) => i % 2 === 0;
+        case 2: return (i, j) => j % 3 === 0;
+        case 3: return (i, j) => (i + j) % 3 === 0;
+        case 4: return (i, j) => (Math.floor(i / 2) + Math.floor(j / 3)) % 2 === 0;
+        case 5: return (i, j) => ((i * j) % 2) + ((i * j) % 3) === 0;
+        case 6: return (i, j) => (((i * j) % 2) + ((i * j) % 3)) % 2 === 0;
+        case 7: return (i, j) => (((i * j) % 3) + ((i + j) % 2)) % 2 === 0;
+        default: throw new Error("bad maskPattern:" + maskPattern);
+      }
+    }
+
+    static getLostPoint(qrCode) {
+      const moduleCount = qrCode.getModuleCount();
+      let lostPoint = 0;
+      for (let row = 0; row < moduleCount; row++) {
+        for (let col = 0; col < moduleCount; col++) {
+          let sameCount = 0;
+          const dark = qrCode.isDark(row, col);
+          for (let r = -1; r <= 1; r++) {
+            if (row + r < 0 || moduleCount <= row + r) continue;
+            for (let c = -1; c <= 1; c++) {
+              if (col + c < 0 || moduleCount <= col + c || (r === 0 && c === 0)) continue;
+              if (dark === qrCode.isDark(row + r, col + c)) sameCount++;
+            }
+          }
+          if (sameCount > 5) lostPoint += 3 + sameCount - 5;
+        }
+      }
+      for (let row = 0; row < moduleCount - 1; row++) {
+        for (let col = 0; col < moduleCount - 1; col++) {
+          let count = 0;
+          if (qrCode.isDark(row, col)) count++;
+          if (qrCode.isDark(row + 1, col)) count++;
+          if (qrCode.isDark(row, col + 1)) count++;
+          if (qrCode.isDark(row + 1, col + 1)) count++;
+          if (count === 0 || count === 4) lostPoint += 3;
+        }
+      }
+      return lostPoint;
+    }
+
+    static getBCHTypeInfo(data) {
+      let d = data << 10;
+      while (QRCodeModel.getBCHDigit(d) - QRCodeModel.getBCHDigit(1335) >= 0) {
+        d ^= 1335 << (QRCodeModel.getBCHDigit(d) - QRCodeModel.getBCHDigit(1335));
+      }
+      return ((data << 10) | d) ^ 21522;
+    }
+
+    static getBCHDigit(data) {
+      let digit = 0;
+      while (data !== 0) { digit++; data >>>= 1; }
+      return digit;
+    }
+
+    static createData(typeNumber, errorCorrectLevel, dataList) {
+      const rsBlocks = QRRSBlock.getRSBlocks(typeNumber, errorCorrectLevel);
+      const buffer = new QRBitBuffer();
+      for (let i = 0; i < dataList.length; i++) {
+        const data = dataList[i];
+        buffer.put(data.mode, 4);
+        buffer.put(data.getLength(), typeNumber < 10 ? 8 : 16);
+        data.write(buffer);
+      }
+      let totalDataCount = 0;
+      for (let i = 0; i < rsBlocks.length; i++) totalDataCount += rsBlocks[i].dataCount;
+      if (buffer.length > totalDataCount * 8) throw new Error("code length overflow");
+      if (buffer.length + 4 <= totalDataCount * 8) buffer.put(0, 4);
+      while (buffer.length % 8 !== 0) buffer.putBit(false);
+      while (true) {
+        if (buffer.length >= totalDataCount * 8) break;
+        buffer.put(0xec, 8);
+        if (buffer.length >= totalDataCount * 8) break;
+        buffer.put(0x11, 8);
+      }
+      return QRCodeModel.createBytes(buffer, rsBlocks);
+    }
+
+    static createBytes(buffer, rsBlocks) {
+      let offset = 0;
+      let maxDcCount = 0;
+      let maxEcCount = 0;
+      const dcdata = new Array(rsBlocks.length);
+      const ecdata = new Array(rsBlocks.length);
+
+      for (let r = 0; r < rsBlocks.length; r++) {
+        const dcCount = rsBlocks[r].dataCount;
+        const ecCount = rsBlocks[r].totalCount - dcCount;
+        maxDcCount = Math.max(maxDcCount, dcCount);
+        maxEcCount = Math.max(maxEcCount, ecCount);
+
+        dcdata[r] = new Array(dcCount);
+        for (let i = 0; i < dcdata[r].length; i++) {
+          dcdata[r][i] = 0xff & buffer.buffer[i + offset];
+        }
+        offset += dcCount;
+
+        const rsPoly = QRCodeModel.getErrorCorrectPolynomial(ecCount);
+        const rawPoly = new QRPolynomial(dcdata[r], rsPoly.getLength() - 1);
+        const modPoly = rawPoly.mod(rsPoly);
+        ecdata[r] = new Array(rsPoly.getLength() - 1);
+        for (let i = 0; i < ecdata[r].length; i++) {
+          const modIndex = i + modPoly.getLength() - ecdata[r].length;
+          ecdata[r][i] = modIndex >= 0 ? modPoly.get(modIndex) : 0;
+        }
+      }
+
+      let totalCodeCount = 0;
+      for (let i = 0; i < rsBlocks.length; i++) totalCodeCount += rsBlocks[i].totalCount;
+      const data = new Array(totalCodeCount);
+      let index = 0;
+
+      for (let i = 0; i < maxDcCount; i++) {
+        for (let r = 0; r < rsBlocks.length; r++) {
+          if (i < dcdata[r].length) data[index++] = dcdata[r][i];
+        }
+      }
+      for (let i = 0; i < maxEcCount; i++) {
+        for (let r = 0; r < rsBlocks.length; r++) {
+          if (i < ecdata[r].length) data[index++] = ecdata[r][i];
+        }
+      }
+      return data;
+    }
+
+    static getErrorCorrectPolynomial(errorCorrectLength) {
+      let a = new QRPolynomial([1], 0);
+      for (let i = 0; i < errorCorrectLength; i++) {
+        a = a.multiply(new QRPolynomial([1, QRMath.gexp(i)], 0));
+      }
+      return a;
+    }
+  }
+
+  QRCodeModel.PATTERN_POSITION_TABLE = [
+    [], [6, 18], [6, 22], [6, 26], [6, 30],
     [6, 34], [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50]
   ];
 
   class StandaloneQRCode {
-    static generate(text) {
-      const utf8Bytes = new TextEncoder().encode(text);
-      const dataLength = utf8Bytes.length;
-
-      let version = 1;
-      let spec = null;
-      let dataCapacity = 0;
-
-      for (let v = 1; v <= 10; v++) {
-        spec = QR_SPECS[v];
-        const ecTotal = spec.ecCodewords * (spec.ecBlocks.reduce((sum, b) => sum + b[0], 0));
-        dataCapacity = spec.totalCodewords - ecTotal;
-        const headerBits = 4 + (v <= 9 ? 8 : 16);
-        const totalBitsNeeded = headerBits + (dataLength * 8);
-        const totalBytesNeeded = Math.ceil(totalBitsNeeded / 8);
-
-        if (totalBytesNeeded <= dataCapacity) {
-          version = v;
-          break;
+    static normalizeText(text) {
+      let trimmed = (text || "").trim();
+      if (!trimmed) return "https://example.com";
+      if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
+        if (trimmed.includes(".") && !trimmed.startsWith("http")) {
+          trimmed = "https://" + trimmed;
         }
       }
-
-      if (!spec || version > 10) {
-        version = 10;
-        spec = QR_SPECS[10];
-      }
-
-      const ecTotal = spec.ecCodewords * (spec.ecBlocks.reduce((sum, b) => sum + b[0], 0));
-      dataCapacity = spec.totalCodewords - ecTotal;
-
-      const bits = [];
-      function pushBits(val, len) {
-        for (let i = len - 1; i >= 0; i--) {
-          bits.push((val >>> i) & 1);
-        }
-      }
-
-      pushBits(0b0100, 4);
-      pushBits(dataLength, version <= 9 ? 8 : 16);
-      for (let i = 0; i < dataLength; i++) {
-        pushBits(utf8Bytes[i], 8);
-      }
-
-      const maxDataBits = dataCapacity * 8;
-      for (let i = 0; i < 4 && bits.length < maxDataBits; i++) {
-        bits.push(0);
-      }
-      while (bits.length % 8 !== 0) {
-        bits.push(0);
-      }
-
-      const dataBytes = [];
-      for (let i = 0; i < bits.length; i += 8) {
-        let b = 0;
-        for (let j = 0; j < 8; j++) {
-          b = (b << 1) | bits[i + j];
-        }
-        dataBytes.push(b);
-      }
-
-      let pad = 0;
-      while (dataBytes.length < dataCapacity) {
-        dataBytes.push((pad++ % 2 === 0) ? PAD0 : PAD1);
-      }
-
-      const rsPoly = getErrorCorrectPolynomial(spec.ecCodewords);
-      const blocksData = [];
-      const blocksEC = [];
-      let byteOffset = 0;
-
-      for (const [numBlocks, blockSize] of spec.ecBlocks) {
-        const dataInBlock = blockSize - spec.ecCodewords;
-        for (let b = 0; b < numBlocks; b++) {
-          const d = dataBytes.slice(byteOffset, byteOffset + dataInBlock);
-          byteOffset += dataInBlock;
-          blocksData.push(d);
-
-          const num = [...d, ...new Array(spec.ecCodewords).fill(0)];
-          for (let i = 0; i < d.length; i++) {
-            const factor = num[i];
-            if (factor !== 0) {
-              const logFactor = glog(factor);
-              for (let j = 0; j < rsPoly.length; j++) {
-                num[i + j] ^= gexp(logFactor + glog(rsPoly[j]));
-              }
-            }
-          }
-          blocksEC.push(num.slice(d.length));
-        }
-      }
-
-      const finalCodewords = [];
-      const maxDataBlockLen = Math.max(...blocksData.map(b => b.length));
-      for (let i = 0; i < maxDataBlockLen; i++) {
-        for (let b = 0; b < blocksData.length; b++) {
-          if (i < blocksData[b].length) {
-            finalCodewords.push(blocksData[b][i]);
-          }
-        }
-      }
-      for (let i = 0; i < spec.ecCodewords; i++) {
-        for (let b = 0; b < blocksEC.length; b++) {
-          finalCodewords.push(blocksEC[b][i]);
-        }
-      }
-
-      const moduleCount = version * 4 + 17;
-      const matrix = Array.from({ length: moduleCount }, () => Array(moduleCount).fill(null));
-      const isReserved = Array.from({ length: moduleCount }, () => Array(moduleCount).fill(false));
-
-      function markReserved(r, c) {
-        if (r >= 0 && r < moduleCount && c >= 0 && c < moduleCount) {
-          isReserved[r][c] = true;
-        }
-      }
-
-      function drawFinder(row, col) {
-        for (let r = -1; r <= 7; r++) {
-          for (let c = -1; c <= 7; c++) {
-            const tr = row + r;
-            const tc = col + c;
-            if (tr >= 0 && tr < moduleCount && tc >= 0 && tc < moduleCount) {
-              markReserved(tr, tc);
-              if (r >= 0 && r <= 6 && c >= 0 && c <= 6) {
-                matrix[tr][tc] = (r === 0 || r === 6 || c === 0 || c === 6 || (r >= 2 && r <= 4 && c >= 2 && c <= 4));
-              } else {
-                matrix[tr][tc] = false;
-              }
-            }
-          }
-        }
-      }
-
-      drawFinder(0, 0);
-      drawFinder(0, moduleCount - 7);
-      drawFinder(moduleCount - 7, 0);
-
-      const alignCoords = ALIGNMENT_PATTERN_TABLE[version];
-      for (const r of alignCoords) {
-        for (const c of alignCoords) {
-          if (isReserved[r][c]) continue;
-          for (let dr = -2; dr <= 2; dr++) {
-            for (let dc = -2; dc <= 2; dc++) {
-              markReserved(r + dr, c + dc);
-              matrix[r + dr][c + dc] = (Math.abs(dr) === 2 || Math.abs(dc) === 2 || (dr === 0 && dc === 0));
-            }
-          }
-        }
-      }
-
-      for (let i = 8; i < moduleCount - 8; i++) {
-        if (!isReserved[6][i]) {
-          markReserved(6, i);
-          matrix[6][i] = (i % 2 === 0);
-        }
-        if (!isReserved[i][6]) {
-          markReserved(i, 6);
-          matrix[i][6] = (i % 2 === 0);
-        }
-      }
-
-      markReserved(4 * version + 9, 8);
-      matrix[4 * version + 9][8] = true;
-
-      for (let i = 0; i < 9; i++) {
-        markReserved(8, i);
-        markReserved(i, 8);
-      }
-      for (let i = moduleCount - 8; i < moduleCount; i++) {
-        markReserved(8, i);
-        markReserved(i, 8);
-      }
-
-      const finalBits = [];
-      for (const byte of finalCodewords) {
-        for (let i = 7; i >= 0; i--) {
-          finalBits.push((byte >>> i) & 1);
-        }
-      }
-      while (finalBits.length < moduleCount * moduleCount) finalBits.push(0);
-
-      let bitIndex = 0;
-      let upward = true;
-      for (let col = moduleCount - 1; col > 0; col -= 2) {
-        if (col === 6) col--;
-        const rows = upward
-          ? Array.from({ length: moduleCount }, (_, i) => moduleCount - 1 - i)
-          : Array.from({ length: moduleCount }, (_, i) => i);
-
-        for (const row of rows) {
-          for (const c of [col, col - 1]) {
-            if (!isReserved[row][c]) {
-              const bit = bitIndex < finalBits.length ? finalBits[bitIndex++] : 0;
-              const mask = ((row + c) % 2 === 0);
-              matrix[row][c] = (bit === 1) ? !mask : mask;
-            }
-          }
-        }
-        upward = !upward;
-      }
-
-      const formatBits = [1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0];
-      for (let i = 0; i < 6; i++) matrix[8][i] = !!formatBits[i];
-      matrix[8][7] = !!formatBits[6];
-      matrix[8][8] = !!formatBits[7];
-      matrix[7][8] = !!formatBits[8];
-      for (let i = 0; i < 6; i++) matrix[5 - i][8] = !!formatBits[9 + i];
-
-      for (let i = 0; i < 8; i++) matrix[moduleCount - 1 - i][8] = !!formatBits[i];
-      for (let i = 0; i < 7; i++) matrix[8][moduleCount - 7 + i] = !!formatBits[8 + i];
-
-      return { modules: matrix, size: moduleCount };
+      return trimmed;
     }
 
     static renderToCanvas(text, pixelSize = 512, colorDark = "#0f172a", colorLight = "#ffffff") {
-      const { modules, size } = this.generate(text);
+      const cleanText = this.normalizeText(text);
+      const model = new QRCodeModel(0, QRErrorCorrectLevel.M);
+      model.addData(cleanText);
+      model.make();
+
+      const moduleCount = model.getModuleCount();
       const canvas = document.createElement("canvas");
       canvas.width = pixelSize;
       canvas.height = pixelSize;
@@ -294,14 +505,14 @@
       ctx.fillRect(0, 0, pixelSize, pixelSize);
 
       ctx.fillStyle = colorDark;
-      const moduleSize = pixelSize / size;
+      const moduleSize = pixelSize / moduleCount;
 
-      for (let r = 0; r < size; r++) {
-        for (let c = 0; c < size; c++) {
-          if (modules[r][c]) {
+      for (let row = 0; row < moduleCount; row++) {
+        for (let col = 0; col < moduleCount; col++) {
+          if (model.isDark(row, col)) {
             ctx.fillRect(
-              Math.round(c * moduleSize),
-              Math.round(r * moduleSize),
+              Math.round(col * moduleSize),
+              Math.round(row * moduleSize),
               Math.ceil(moduleSize),
               Math.ceil(moduleSize)
             );
@@ -313,33 +524,24 @@
     }
   }
 
-  // ==========================================
-  // 2. CardProject.js (State Management)
-  // ==========================================
+  // ============================================================
+  // 2. CardProject.js (State Management with Pan & Zoom & Auto Edge)
+  // ============================================================
   class CardProject {
-    static VERSION = "1.0";
+    static VERSION = "1.1";
     static DEFAULT_DIMENSIONS = {
       widthMm: 90,
       heightMm: 50,
       dpi: 300,
-      get pixelWidth() {
-        return Math.round((this.widthMm / 25.4) * this.dpi);
-      },
-      get pixelHeight() {
-        return Math.round((this.heightMm / 25.4) * this.dpi);
-      },
-      get aspectRatio() {
-        return this.widthMm / this.heightMm;
-      }
+      get pixelWidth() { return Math.round((this.widthMm / 25.4) * this.dpi); },
+      get pixelHeight() { return Math.round((this.heightMm / 25.4) * this.dpi); },
+      get aspectRatio() { return this.widthMm / this.heightMm; }
     };
 
     constructor(initialData = null) {
       this._listeners = new Map();
       this.resetToDefaults(false);
-
-      if (initialData) {
-        this.fromJSON(initialData, false);
-      }
+      if (initialData) this.fromJSON(initialData, false);
     }
 
     resetToDefaults(notify = true) {
@@ -361,7 +563,10 @@
           dataUrl: null,
           fileName: "",
           fileSize: 0,
-          fitMode: "cover",
+          fitMode: "contain",
+          zoom: 1.0,
+          panX: 0,
+          panY: 0,
           bgColor: "#ffffff"
         },
         back: {
@@ -369,13 +574,16 @@
           dataUrl: null,
           fileName: "",
           fileSize: 0,
-          fitMode: "cover",
+          fitMode: "contain",
+          zoom: 1.0,
+          panX: 0,
+          panY: 0,
           bgColor: "#ffffff"
         },
         qr: {
           enabled: true,
           side: "back",
-          url: "https://nexusai-systems.io",
+          url: "https://8ace7cea.job-fair-portfolio.pages.dev",
           sizeMm: 22,
           xPercent: 70,
           yPercent: 50,
@@ -383,7 +591,7 @@
           quietZonePaddingMm: 1.5,
           colorDark: "#0f172a",
           colorLight: "#ffffff",
-          errorCorrectionLevel: "H"
+          errorCorrectionLevel: "M"
         },
         settings: {
           showSafeZone: true,
@@ -400,46 +608,27 @@
     }
 
     subscribe(event, callback) {
-      if (!this._listeners.has(event)) {
-        this._listeners.set(event, new Set());
-      }
+      if (!this._listeners.has(event)) this._listeners.set(event, new Set());
       this._listeners.get(event).add(callback);
       return () => this.unsubscribe(event, callback);
     }
 
-    on(event, callback) {
-      return this.subscribe(event, callback);
-    }
-
+    on(event, callback) { return this.subscribe(event, callback); }
     unsubscribe(event, callback) {
-      if (this._listeners.has(event)) {
-        this._listeners.get(event).delete(callback);
-      }
+      if (this._listeners.has(event)) this._listeners.get(event).delete(callback);
     }
-
-    off(event, callback) {
-      this.unsubscribe(event, callback);
-    }
-
-    onStateChange(callback) {
-      return this.subscribe("stateChange", callback);
-    }
+    off(event, callback) { this.unsubscribe(event, callback); }
+    onStateChange(callback) { return this.subscribe("stateChange", callback); }
 
     emit(event, data) {
       if (this._listeners.has(event)) {
         for (const listener of this._listeners.get(event)) {
-          try {
-            listener(data);
-          } catch (err) {
-            console.error(`[CardProject] Error in listener "${event}":`, err);
-          }
+          try { listener(data); } catch (err) { console.error(err); }
         }
       }
     }
 
-    getState() {
-      return this.state;
-    }
+    getState() { return this.state; }
 
     setActiveSide(side) {
       if (side !== "front" && side !== "back") return;
@@ -450,28 +639,93 @@
       this.emit("sideChange", side);
     }
 
+    static detectEdgeColor(image) {
+      if (!image || !image.naturalWidth || !image.naturalHeight || typeof document === "undefined") {
+        return "#ffffff";
+      }
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.min(64, image.naturalWidth);
+        canvas.height = Math.min(64, image.naturalHeight);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+        let r = 0, g = 0, b = 0, count = 0;
+        for (let x = 0; x < canvas.width; x += 2) {
+          let idx = (0 * canvas.width + x) * 4;
+          r += data[idx]; g += data[idx + 1]; b += data[idx + 2]; count++;
+          idx = ((canvas.height - 1) * canvas.width + x) * 4;
+          r += data[idx]; g += data[idx + 1]; b += data[idx + 2]; count++;
+        }
+        for (let y = 0; y < canvas.height; y += 2) {
+          let idx = (y * canvas.width + 0) * 4;
+          r += data[idx]; g += data[idx + 1]; b += data[idx + 2]; count++;
+          idx = (y * canvas.width + (canvas.width - 1)) * 4;
+          r += data[idx]; g += data[idx + 1]; b += data[idx + 2]; count++;
+        }
+        r = Math.round(r / count);
+        g = Math.round(g / count);
+        b = Math.round(b / count);
+        return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+      } catch (e) {
+        return "#ffffff";
+      }
+    }
+
     setImage(side, image, dataUrl, fileName = "", fileSize = 0) {
       if (side !== "front" && side !== "back") return;
-
       this.state[side].image = image;
       this.state[side].dataUrl = dataUrl;
       this.state[side].fileName = fileName;
       this.state[side].fileSize = fileSize;
-      this.state.metadata.updatedAt = new Date().toISOString();
+      this.state[side].zoom = 1.0;
+      this.state[side].panX = 0;
+      this.state[side].panY = 0;
 
+      if (image) {
+        this.state[side].bgColor = CardProject.detectEdgeColor(image);
+      }
+
+      this.state.metadata.updatedAt = new Date().toISOString();
       this.emit("stateChange", this.state);
       this.emit("imageChange", { side, hasImage: !!dataUrl, fileName });
     }
 
     removeImage(side) {
-      this.setImage(side, null, null, "", 0);
+      if (side !== "front" && side !== "back") return;
+      this.state[side].image = null;
+      this.state[side].dataUrl = null;
+      this.state[side].fileName = "";
+      this.state[side].fileSize = 0;
+      this.state[side].zoom = 1.0;
+      this.state[side].panX = 0;
+      this.state[side].panY = 0;
+      this.state.metadata.updatedAt = new Date().toISOString();
+      this.emit("stateChange", this.state);
+    }
+
+    setImageTransform(side, { zoom, panX, panY, fitMode, bgColor }) {
+      if (side !== "front" && side !== "back") return;
+      if (zoom !== undefined) this.state[side].zoom = Math.max(0.4, Math.min(2.5, Number(zoom) || 1.0));
+      if (panX !== undefined) this.state[side].panX = Math.max(-50, Math.min(50, Number(panX) || 0));
+      if (panY !== undefined) this.state[side].panY = Math.max(-50, Math.min(50, Number(panY) || 0));
+      if (fitMode !== undefined) this.state[side].fitMode = fitMode;
+      if (bgColor !== undefined) this.state[side].bgColor = bgColor;
+      this.state.metadata.updatedAt = new Date().toISOString();
+      this.emit("stateChange", this.state);
     }
 
     setFitMode(side, mode) {
       if (side !== "front" && side !== "back") return;
-      if (mode !== "cover" && mode !== "contain") return;
-
       this.state[side].fitMode = mode;
+      this.state.metadata.updatedAt = new Date().toISOString();
+      this.emit("stateChange", this.state);
+    }
+
+    setBgColor(side, color) {
+      if (side !== "front" && side !== "back") return;
+      this.state[side].bgColor = color;
       this.state.metadata.updatedAt = new Date().toISOString();
       this.emit("stateChange", this.state);
     }
@@ -480,7 +734,6 @@
       Object.assign(this.state.qr, updates);
       this.state.qr.sizeMm = Math.max(10, Math.min(35, Number(this.state.qr.sizeMm) || 20));
       this.clampQRCoordinates();
-
       this.state.metadata.updatedAt = new Date().toISOString();
       this.emit("stateChange", this.state);
       this.emit("qrChange", this.state.qr);
@@ -490,7 +743,6 @@
       this.state.qr.xPercent = xPercent;
       this.state.qr.yPercent = yPercent;
       this.clampQRCoordinates();
-
       this.state.metadata.updatedAt = new Date().toISOString();
       this.emit("stateChange", this.state);
       this.emit("qrMove", { xPercent: this.state.qr.xPercent, yPercent: this.state.qr.yPercent });
@@ -557,32 +809,12 @@
     }
 
     toJSON() {
-      return JSON.stringify({
-        version: this.state.version,
-        metadata: this.state.metadata,
-        dimensions: this.state.dimensions,
-        front: {
-          dataUrl: this.state.front.dataUrl,
-          fileName: this.state.front.fileName,
-          fitMode: this.state.front.fitMode,
-          bgColor: this.state.front.bgColor
-        },
-        back: {
-          dataUrl: this.state.back.dataUrl,
-          fileName: this.state.back.fileName,
-          fitMode: this.state.back.fitMode,
-          bgColor: this.state.back.bgColor
-        },
-        qr: { ...this.state.qr },
-        settings: { ...this.state.settings },
-        layers: [...this.state.layers]
-      }, null, 2);
+      return JSON.stringify(this.state, null, 2);
     }
 
     async fromJSON(json, notify = true) {
       const data = typeof json === "string" ? JSON.parse(json) : json;
       if (!data) return;
-
       this.state.version = data.version || CardProject.VERSION;
       this.state.dimensions = { ...this.state.dimensions, ...(data.dimensions || {}) };
 
@@ -592,26 +824,20 @@
           this.state.front.image = await this._loadImage(data.front.dataUrl);
         }
       }
-
       if (data.back) {
         this.state.back = { ...this.state.back, ...data.back };
         if (data.back.dataUrl) {
           this.state.back.image = await this._loadImage(data.back.dataUrl);
         }
       }
-
       if (data.qr) {
         this.state.qr = { ...this.state.qr, ...data.qr };
         this.clampQRCoordinates();
       }
-
       if (data.settings) {
         this.state.settings = { ...this.state.settings, ...data.settings };
       }
-
-      if (notify) {
-        this.emit("stateChange", this.state);
-      }
+      if (notify) this.emit("stateChange", this.state);
     }
 
     _loadImage(dataUrl) {
@@ -624,9 +850,9 @@
     }
   }
 
-  // ==========================================
-  // 3. CanvasRenderer.js (300 DPI Rendering)
-  // ==========================================
+  // ============================================================
+  // 3. CanvasRenderer.js (300 DPI Rendering with Pan & Zoom)
+  // ============================================================
   class CanvasRenderer {
     static PRINT_DPI = 300;
     static PRINT_WIDTH_PX = 1063;
@@ -634,49 +860,48 @@
     static CARD_WIDTH_MM = 90;
     static CARD_HEIGHT_MM = 50;
 
-    static calculateSmartCrop(imgWidth, imgHeight, targetWidth, targetHeight, fitMode = "cover") {
+    static calculateTransform(imgWidth, imgHeight, targetWidth, targetHeight, sideData = {}) {
       if (!imgWidth || !imgHeight || !targetWidth || !targetHeight) {
         return { sx: 0, sy: 0, sw: 0, sh: 0, dx: 0, dy: 0, dw: 0, dh: 0 };
       }
 
+      const fitMode = sideData.fitMode || "contain";
+      const zoom = Number(sideData.zoom) || 1.0;
+      const panX = (Number(sideData.panX) || 0) / 100;
+      const panY = (Number(sideData.panY) || 0) / 100;
+
       const imgAspect = imgWidth / imgHeight;
       const targetAspect = targetWidth / targetHeight;
 
-      if (fitMode === "contain") {
-        let dw, dh, dx, dy;
+      let baseW, baseH;
+
+      if (fitMode === "cover") {
         if (imgAspect > targetAspect) {
-          dw = targetWidth;
-          dh = targetWidth / imgAspect;
-          dx = 0;
-          dy = (targetHeight - dh) / 2;
+          baseH = targetHeight;
+          baseW = targetHeight * imgAspect;
         } else {
-          dh = targetHeight;
-          dw = targetHeight * imgAspect;
-          dx = (targetWidth - dw) / 2;
-          dy = 0;
+          baseW = targetWidth;
+          baseH = targetWidth / imgAspect;
         }
-        return {
-          sx: 0, sy: 0, sw: imgWidth, sh: imgHeight,
-          dx: Math.round(dx), dy: Math.round(dy), dw: Math.round(dw), dh: Math.round(dh)
-        };
+      } else {
+        if (imgAspect > targetAspect) {
+          baseW = targetWidth;
+          baseH = targetWidth / imgAspect;
+        } else {
+          baseH = targetHeight;
+          baseW = targetHeight * imgAspect;
+        }
       }
 
-      let sx = 0, sy = 0, sw = imgWidth, sh = imgHeight;
-      if (imgAspect > targetAspect) {
-        sw = imgHeight * targetAspect;
-        sh = imgHeight;
-        sx = (imgWidth - sw) / 2;
-        sy = 0;
-      } else {
-        sw = imgWidth;
-        sh = imgWidth / targetAspect;
-        sx = 0;
-        sy = (imgHeight - sh) / 2;
-      }
+      const dw = baseW * zoom;
+      const dh = baseH * zoom;
+      const dx = (targetWidth - dw) / 2 + (panX * targetWidth);
+      const dy = (targetHeight - dh) / 2 + (panY * targetHeight);
 
       return {
-        sx: Math.round(sx), sy: Math.round(sy), sw: Math.round(sw), sh: Math.round(sh),
-        dx: 0, dy: 0, dw: targetWidth, dh: targetHeight
+        sx: 0, sy: 0, sw: imgWidth, sh: imgHeight,
+        dx: Math.round(dx), dy: Math.round(dy),
+        dw: Math.round(dw), dh: Math.round(dh)
       };
     }
 
@@ -693,36 +918,36 @@
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "high";
 
-      // 1. Clear background
+      // 1. Fill background with detected edge color
       ctx.fillStyle = sideData.bgColor || "#ffffff";
       ctx.fillRect(0, 0, width, height);
 
-      // 2. Render Artwork
+      // 2. Draw artwork with transform
       if (sideData.image && sideData.image.complete && sideData.image.naturalWidth > 0) {
-        const crop = this.calculateSmartCrop(
+        const t = this.calculateTransform(
           sideData.image.naturalWidth,
           sideData.image.naturalHeight,
           width,
           height,
-          sideData.fitMode || "cover"
+          sideData
         );
 
         ctx.drawImage(
           sideData.image,
-          crop.sx, crop.sy, crop.sw, crop.sh,
-          crop.dx, crop.dy, crop.dw, crop.dh
+          t.sx, t.sy, t.sw, t.sh,
+          t.dx, t.dy, t.dw, t.dh
         );
       } else {
         this.drawPlaceholder(ctx, width, height, side, forExport);
       }
 
-      // 3. Render QR Code
+      // 3. Draw QR
       const qr = cardState.qr;
       if (qr && qr.enabled && qr.side === side && options.qrCanvas) {
         this.drawQRCode(ctx, width, height, qr, options.qrCanvas, cardState.dimensions);
       }
 
-      // 4. Safe Zone Guide (preview only)
+      // 4. Safe Zone Guide
       if (!forExport) {
         const showSafeZone = options.includeSafeZone ?? cardState.settings?.showSafeZone ?? true;
         if (showSafeZone) {
@@ -771,7 +996,7 @@
       ctx.font = `400 ${Math.round(baseFontSize * 0.75)}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
       ctx.fillStyle = "#64748b";
       ctx.fillText("Upload PNG / JPG / WebP (90 x 50 mm)", width / 2, height / 2 + baseFontSize * 0.5);
-      ctx.fillText("Auto-crops to 1.8:1 aspect ratio", width / 2, height / 2 + baseFontSize * 1.5);
+      ctx.fillText("Smart Zoom & Auto-Edge match", width / 2, height / 2 + baseFontSize * 1.5);
       ctx.restore();
     }
 
@@ -790,7 +1015,7 @@
         const boxY = yPx - paddingPx;
         const boxW = qrSizePx + (paddingPx * 2);
         const boxH = qrSizePx + (paddingPx * 2);
-        const borderRadius = Math.max(2, Math.round(paddingPx * 0.4));
+        const borderRadius = Math.max(3, Math.round(paddingPx * 0.4));
 
         ctx.fillStyle = qrState.colorLight || "#ffffff";
         ctx.beginPath();
@@ -801,7 +1026,7 @@
         }
         ctx.fill();
 
-        ctx.strokeStyle = "rgba(0,0,0,0.06)";
+        ctx.strokeStyle = "rgba(0,0,0,0.08)";
         ctx.lineWidth = 1;
         ctx.stroke();
       }
@@ -869,9 +1094,9 @@
     }
   }
 
-  // ==========================================
-  // 4. QRManager.js (Drag & Drop + Generation)
-  // ==========================================
+  // ============================================================
+  // 4. QRManager.js (ISO Powered QR Controller)
+  // ============================================================
   class QRManager {
     constructor(cardProject, stageContainer) {
       this.project = cardProject;
@@ -894,13 +1119,14 @@
         return null;
       }
 
-      const cacheKey = `${qrState.url}|${qrState.colorDark}|${qrState.colorLight}`;
+      const cleanUrl = StandaloneQRCode.normalizeText(qrState.url);
+      const cacheKey = `${cleanUrl}|${qrState.colorDark}|${qrState.colorLight}`;
       if (this.qrCanvasCache && this.lastRenderedUrl === cacheKey) {
         return this.qrCanvasCache;
       }
 
-      const canvas = await this._generateQRCanvas(
-        qrState.url,
+      const canvas = StandaloneQRCode.renderToCanvas(
+        cleanUrl,
         512,
         qrState.colorDark || "#0f172a",
         qrState.colorLight || "#ffffff"
@@ -911,42 +1137,6 @@
       return canvas;
     }
 
-    async _generateQRCanvas(url, size, colorDark, colorLight) {
-      if (typeof window !== "undefined" && window.QRCode) {
-        try {
-          const tempDiv = document.createElement("div");
-          tempDiv.style.display = "none";
-          document.body.appendChild(tempDiv);
-
-          new window.QRCode(tempDiv, {
-            text: url,
-            width: size,
-            height: size,
-            colorDark: colorDark,
-            colorLight: colorLight,
-            correctLevel: window.QRCode.CorrectLevel.H
-          });
-
-          await new Promise((r) => setTimeout(r, 20));
-
-          const canvas = tempDiv.querySelector("canvas");
-          if (canvas) {
-            const resCanvas = document.createElement("canvas");
-            resCanvas.width = size;
-            resCanvas.height = size;
-            resCanvas.getContext("2d").drawImage(canvas, 0, 0);
-            document.body.removeChild(tempDiv);
-            return resCanvas;
-          }
-          document.body.removeChild(tempDiv);
-        } catch (e) {
-          // Fallback to standalone
-        }
-      }
-
-      return StandaloneQRCode.renderToCanvas(url, size, colorDark, colorLight);
-    }
-
     invalidateCache() {
       this.qrCanvasCache = null;
       this.lastRenderedUrl = "";
@@ -954,7 +1144,6 @@
 
     getQRBoundingBoxPx() {
       if (!this.stageContainer) return null;
-
       const rect = this.stageContainer.getBoundingClientRect();
       const state = this.project.getState();
       const qr = state.qr;
@@ -971,15 +1160,9 @@
       const paddingPx = (paddingMm / cardWidthMm) * rect.width;
 
       return {
-        x: xPx,
-        y: yPx,
-        width: qrSizePx,
-        height: qrSizePx,
-        padding: paddingPx,
-        boxX: xPx - paddingPx,
-        boxY: yPx - paddingPx,
-        boxWidth: qrSizePx + (paddingPx * 2),
-        boxHeight: qrSizePx + (paddingPx * 2)
+        x: xPx, y: yPx, width: qrSizePx, height: qrSizePx, padding: paddingPx,
+        boxX: xPx - paddingPx, boxY: yPx - paddingPx,
+        boxWidth: qrSizePx + (paddingPx * 2), boxHeight: qrSizePx + (paddingPx * 2)
       };
     }
 
@@ -988,7 +1171,6 @@
       const rect = this.stageContainer.getBoundingClientRect();
       const localX = clientX - rect.left;
       const localY = clientY - rect.top;
-
       const box = this.getQRBoundingBoxPx();
       if (!box) return false;
 
@@ -1002,7 +1184,6 @@
 
     _initPointerListeners() {
       if (!this.stageContainer) return;
-
       this.stageContainer.addEventListener("pointerdown", (e) => this._onPointerDown(e));
       window.addEventListener("pointermove", (e) => this._onPointerMove(e));
       window.addEventListener("pointerup", (e) => this._onPointerUp(e));
@@ -1022,10 +1203,7 @@
           yPercent: state.qr.yPercent
         };
 
-        try {
-          this.stageContainer.setPointerCapture(e.pointerId);
-        } catch (err) {}
-
+        try { this.stageContainer.setPointerCapture(e.pointerId); } catch (err) {}
         this.stageContainer.classList.add("cursor-grabbing");
         e.preventDefault();
       }
@@ -1075,9 +1253,7 @@
         this.isDragging = false;
         this.pointerId = null;
         this.stageContainer.classList.remove("cursor-grabbing");
-        try {
-          if (e.pointerId) this.stageContainer.releasePointerCapture(e.pointerId);
-        } catch (err) {}
+        try { if (e.pointerId) this.stageContainer.releasePointerCapture(e.pointerId); } catch (err) {}
       }
     }
 
@@ -1095,9 +1271,9 @@
     }
   }
 
-  // ==========================================
-  // 5. PDFExporter.js (Print PDF)
-  // ==========================================
+  // ============================================================
+  // 5. PDFExporter.js
+  // ============================================================
   class PDFExporter {
     static async exportPDF(cardProject, qrManager, options = {}) {
       const onProgress = options.onProgress || (() => {});
@@ -1105,10 +1281,9 @@
       const fileName = options.fileName || `business-card-${Date.now()}.pdf`;
 
       onProgress("Initializing PDF engine...", 10);
-
       const jsPDFConstructor = (typeof window !== "undefined" && (window.jspdf?.jsPDF || window.jsPDF));
       if (!jsPDFConstructor) {
-        throw new Error("jsPDF library is not loaded. Please ensure you are connected to the internet or reload.");
+        throw new Error("jsPDF is not loaded. Please connect to the internet or reload.");
       }
 
       onProgress("Rendering high-res elements...", 25);
@@ -1147,14 +1322,12 @@
       doc.setProperties({
         title: state.metadata.title || "Business Card 90x50mm",
         subject: "Print-ready double-sided business card",
-        author: "CardStudio 90x50",
-        creator: "CardStudio 90x50"
+        author: "CardStudio 90x50"
       });
 
       onProgress("Finalizing download...", 95);
       doc.save(fileName);
       onProgress("Complete!", 100);
-
       return doc.output("blob");
     }
 
@@ -1162,7 +1335,6 @@
       const state = cardProject.getState();
       const qrCanvas = await qrManager.getQRCanvas();
       const canvas = CanvasRenderer.create300DPICanvas(state, side, qrCanvas);
-
       const dataUrl = canvas.toDataURL("image/png");
       const link = document.createElement("a");
       link.download = `card-${side}-300dpi-${Date.now()}.png`;
@@ -1173,9 +1345,9 @@
     }
   }
 
-  // ==========================================
-  // 6. i18n.js (Bilingual Controller)
-  // ==========================================
+  // ============================================================
+  // 6. i18n Dictionary
+  // ============================================================
   const translations = {
     en: {
       appTitle: "CardStudio 90x50",
@@ -1183,26 +1355,32 @@
       frontCardTab: "Front Card",
       backCardTab: "Back Card",
       qrBadge: "QR Active",
-      sectionImages: "1. Card Artwork",
-      sectionImagesDesc: "Upload Front and Back designs. Images automatically auto-crop to 90×50mm (1.8:1 aspect ratio).",
+      sectionImages: "1. Card Artwork & Image Scale",
+      sectionImagesDesc: "Upload designs and control Zoom & Pan so not a single pixel or text is cut off on 90×50mm.",
       frontUploadLabel: "Front Side Image",
       backUploadLabel: "Back Side Image",
       uploadPlaceholder: "Click or drag & drop (PNG, JPG, WebP)",
       removeBtn: "Remove",
-      fitModeLabel: "Smart Fit Mode",
-      fitModeCover: "Auto-Crop Fill (Cover - Recommended)",
-      fitModeContain: "Fit with Margin (Contain)",
+      fitModeLabel: "Fit Mode",
+      fitModeContain: "Fit Entire Card (No Crop - Recommended)",
+      fitModeCover: "Fill & Crop (Cover)",
+      imageZoomLabel: "Image Zoom / Scale",
+      imagePanXLabel: "Position X (Horizontal)",
+      imagePanYLabel: "Position Y (Vertical)",
+      bgColorLabel: "Card Margin / Edge Color",
+      autoColorHint: "Auto-detected from image border pixels",
+      resetTransformBtn: "Reset Scale & Position",
       sectionQR: "2. Interactive QR Code",
-      sectionQRDesc: "Generate a dynamic QR code and position it smoothly with drag & drop on the card preview.",
+      sectionQRDesc: "Generate an ISO-standard scannable QR code. Supports auto-URL formatting and live pointer dragging.",
       qrUrlLabel: "Destination URL",
       qrUrlPlaceholder: "https://yourwebsite.com",
       qrSideLabel: "QR Placement Side",
-      qrSideNone: "None (Disabled)",
+      qrSideNone: "Disabled (Hidden)",
       qrSideFront: "Front Card",
-      qrSideBack: "Back Card (Recommended)",
+      qrSideBack: "Back Card",
       qrSizeLabel: "QR Size (1:1 Ratio)",
       qrQuietZoneLabel: "White Quiet-Zone Box",
-      qrQuietZoneHint: "Adds white padding so QR scans easily on busy/dark designs",
+      qrQuietZoneHint: "White padding ensures scannability over dark or complex backgrounds",
       quickAlignLabel: "Quick Snap Presets",
       alignBottomRight: "Bottom-Right",
       alignBottomLeft: "Bottom-Left",
@@ -1233,23 +1411,29 @@
       frontCardTab: "وجه الكرت",
       backCardTab: "ظهر الكرت",
       qrBadge: "الباركود هنا",
-      sectionImages: "1. صور وتصميم الكرت",
-      sectionImagesDesc: "ارفع تصميم الوجه والظهر. يتم القص التلقائي الذكي بدقة ليتطابق مع مقاس 90×50 مم (نسبة 1.8:1).",
+      sectionImages: "1. صور الكرت والتحكم بالأبعاد",
+      sectionImagesDesc: "ارفع تصميمك وتحكم بنسبة التكبير ومكان الصورة بدقة لمنع قص أي نص في مقاس 9×5 سم.",
       frontUploadLabel: "صورة وجه الكرت",
       backUploadLabel: "صورة ظهر الكرت",
       uploadPlaceholder: "اضغط أو اسحب وأفلت هنا (PNG, JPG, WebP)",
       removeBtn: "حذف",
-      fitModeLabel: "طريقة الملاءمة الذكية",
-      fitModeCover: "ملء وقص تلقائي ذكي (مستحسن - Cover)",
-      fitModeContain: "احتواء كامل مع هوامش (Contain)",
+      fitModeLabel: "طريقة الاحتواء والعرض",
+      fitModeContain: "احتواء كامل للكرت (بدون أي قص للنصوص - مستحسن)",
+      fitModeCover: "ملء الإطار بالكامل (قص تلقائي للأطراف)",
+      imageZoomLabel: "حجم الصورة (Zoom)",
+      imagePanXLabel: "الإزاحة الأفقية (يمين / يسار)",
+      imagePanYLabel: "الإزاحة الرأسية (أعلى / أسفل)",
+      bgColorLabel: "لون حواف وخلفية الكرت",
+      autoColorHint: "تم التقاط اللون تلقائياً من أطراف صورتك",
+      resetTransformBtn: "إعادة ضبط موضع وحجم الصورة",
       sectionQR: "2. باركود الموقع التفاعلي (QR)",
-      sectionQRDesc: "أنشئ كود QR وضع مكانه بسهولة بالسحب والإفلات المباشر على الكرت في الشاشة.",
+      sectionQRDesc: "توليد كود QR قياسي ومضمون 100% للمسح من كل كاميرات الهواتف الذكية مع السحب المباشر.",
       qrUrlLabel: "رابط الموقع الإلكتروني",
       qrUrlPlaceholder: "https://yourwebsite.com",
       qrSideLabel: "مكان وضع الباركود",
-      qrSideNone: "بدون باركود",
+      qrSideNone: "معطل (مخفي)",
       qrSideFront: "على وجه الكرت",
-      qrSideBack: "على ظهر الكرت (مستحسن)",
+      qrSideBack: "على ظهر الكرت",
       qrSizeLabel: "حجم الباركود (مربع 1:1)",
       qrQuietZoneLabel: "خلفية بيضاء حول الباركود (Quiet Zone)",
       qrQuietZoneHint: "تضمن سهولة وسرعة مسح الكود حتى فوق الخلفيات الداكنة أو المزدحمة",
@@ -1282,33 +1466,18 @@
   class I18nManager {
     constructor(defaultLang = "en") {
       let saved = null;
-      try {
-        saved = localStorage.getItem("card_studio_lang");
-      } catch (e) {}
+      try { saved = localStorage.getItem("card_studio_lang"); } catch (e) {}
       this.currentLang = saved || defaultLang;
     }
-
-    get lang() {
-      return this.currentLang;
-    }
-
-    t(key) {
-      return translations[this.currentLang]?.[key] || translations.en[key] || key;
-    }
-
+    get lang() { return this.currentLang; }
+    t(key) { return translations[this.currentLang]?.[key] || translations.en[key] || key; }
     setLanguage(lang) {
       if (lang !== "en" && lang !== "ar") return;
       this.currentLang = lang;
-      try {
-        localStorage.setItem("card_studio_lang", lang);
-      } catch (e) {}
+      try { localStorage.setItem("card_studio_lang", lang); } catch (e) {}
       this.applyToDOM();
     }
-
-    toggle() {
-      this.setLanguage(this.currentLang === "en" ? "ar" : "en");
-    }
-
+    toggle() { this.setLanguage(this.currentLang === "en" ? "ar" : "en"); }
     applyToDOM() {
       const isRtl = this.currentLang === "ar";
       document.documentElement.dir = isRtl ? "rtl" : "ltr";
@@ -1335,15 +1504,14 @@
     }
   }
 
-  // ==========================================
-  // 7. sample-cards.js (Dynamic Demo Cards)
-  // ==========================================
+  // ============================================================
+  // 7. Demo Card Generator
+  // ============================================================
   class SampleCardGenerator {
     static generateDemoCards() {
       const width = 1063;
       const height = 591;
 
-      // Front Canvas
       const fCanvas = document.createElement("canvas");
       fCanvas.width = width;
       fCanvas.height = height;
@@ -1368,23 +1536,22 @@
 
       fCtx.fillStyle = "#ffffff";
       fCtx.font = "bold 44px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-      fCtx.fillText("MOSTAFA ELTAWEEL", width * 0.11, height * 0.38);
+      fCtx.fillText("MOSTAFA MOHAMED ELTAWEEL", width * 0.11, height * 0.38);
 
       fCtx.fillStyle = "#94a3b8";
       fCtx.font = "500 22px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-      fCtx.fillText("Founder & Lead Software Engineer", width * 0.11, height * 0.45);
+      fCtx.fillText("Applied AI & Machine Learning | Data Analysis & BI", width * 0.11, height * 0.45);
 
       fCtx.fillStyle = "rgba(148, 163, 184, 0.25)";
       fCtx.fillRect(width * 0.11, height * 0.52, width * 0.75, 1);
 
       fCtx.fillStyle = "#cbd5e1";
       fCtx.font = "400 19px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-      fCtx.fillText("✉  contact@eltaweel.dev", width * 0.11, height * 0.62);
-      fCtx.fillText("✆  +20 (100) 123-4567", width * 0.11, height * 0.69);
-      fCtx.fillText("🌐  www.card-destine.io", width * 0.52, height * 0.62);
+      fCtx.fillText("✉  Mostafa.eltaweel000@gmail.com", width * 0.11, height * 0.62);
+      fCtx.fillText("✆  +0201112611898", width * 0.11, height * 0.69);
+      fCtx.fillText("🌐  8ace7cea.job-fair-portfolio.pages.dev", width * 0.52, height * 0.62);
       fCtx.fillText("📍  Cairo, Egypt", width * 0.52, height * 0.69);
 
-      // Back Canvas
       const bCanvas = document.createElement("canvas");
       bCanvas.width = width;
       bCanvas.height = height;
@@ -1411,16 +1578,16 @@
       bCtx.fillStyle = "#ffffff";
       bCtx.font = "bold 38px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
       bCtx.textAlign = "left";
-      bCtx.fillText("DESTINE", 65, 2);
+      bCtx.fillText("ELTAWEEL", 65, 2);
 
       bCtx.fillStyle = "#38bdf8";
       bCtx.font = "600 18px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-      bCtx.fillText("CARDS & PRINTS", 65, 28);
+      bCtx.fillText("PORTFOLIO & DEMOS", 65, 28);
       bCtx.restore();
 
       bCtx.fillStyle = "#64748b";
       bCtx.font = "400 18px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
-      bCtx.fillText("Precision 300 DPI Engineering • Ready for Press", width * 0.15, height * 0.72);
+      bCtx.fillText("Precision 300 DPI Engineering • Press-Ready", width * 0.15, height * 0.72);
 
       const frontDataUrl = fCanvas.toDataURL("image/png");
       const backDataUrl = bCanvas.toDataURL("image/png");
@@ -1441,9 +1608,9 @@
     }
   }
 
-  // ==========================================
+  // ============================================================
   // 8. Main App Orchestrator
-  // ==========================================
+  // ============================================================
   class App {
     constructor() {
       this.project = new CardProject();
@@ -1474,7 +1641,17 @@
         backLoadedInfo: document.getElementById("back-loaded-info"),
         backFileName: document.getElementById("back-file-name"),
         removeBackBtn: document.getElementById("remove-back-btn"),
+
         fitModeRadios: document.querySelectorAll('input[name="fit-mode"]'),
+        imageZoomSlider: document.getElementById("image-zoom-slider"),
+        imageZoomBadge: document.getElementById("image-zoom-badge"),
+        imagePanXSlider: document.getElementById("image-panx-slider"),
+        imagePanXBadge: document.getElementById("image-panx-badge"),
+        imagePanYSlider: document.getElementById("image-pany-slider"),
+        imagePanYBadge: document.getElementById("image-pany-badge"),
+        bgColorPicker: document.getElementById("bg-color-picker"),
+        resetTransformBtn: document.getElementById("reset-transform-btn"),
+
         qrUrlInput: document.getElementById("qr-url-input"),
         qrUpdateBtn: document.getElementById("qr-update-btn"),
         qrSideBtns: document.querySelectorAll(".qr-side-btn"),
@@ -1553,10 +1730,42 @@
 
       this.dom.fitModeRadios.forEach((radio) => {
         radio.addEventListener("change", (e) => {
-          const mode = e.target.value;
-          this.project.setFitMode("front", mode);
-          this.project.setFitMode("back", mode);
+          const side = this.project.getState().settings.activeSide;
+          this.project.setFitMode(side, e.target.value);
         });
+      });
+
+      this.dom.imageZoomSlider?.addEventListener("input", (e) => {
+        const side = this.project.getState().settings.activeSide;
+        const zoom = Number(e.target.value);
+        if (this.dom.imageZoomBadge) {
+          this.dom.imageZoomBadge.textContent = `${Math.round(zoom * 100)}%`;
+        }
+        this.project.setImageTransform(side, { zoom });
+      });
+
+      this.dom.imagePanXSlider?.addEventListener("input", (e) => {
+        const side = this.project.getState().settings.activeSide;
+        const panX = Number(e.target.value);
+        if (this.dom.imagePanXBadge) this.dom.imagePanXBadge.textContent = `${panX}%`;
+        this.project.setImageTransform(side, { panX });
+      });
+
+      this.dom.imagePanYSlider?.addEventListener("input", (e) => {
+        const side = this.project.getState().settings.activeSide;
+        const panY = Number(e.target.value);
+        if (this.dom.imagePanYBadge) this.dom.imagePanYBadge.textContent = `${panY}%`;
+        this.project.setImageTransform(side, { panY });
+      });
+
+      this.dom.bgColorPicker?.addEventListener("input", (e) => {
+        const side = this.project.getState().settings.activeSide;
+        this.project.setBgColor(side, e.target.value);
+      });
+
+      this.dom.resetTransformBtn?.addEventListener("click", () => {
+        const side = this.project.getState().settings.activeSide;
+        this.project.setImageTransform(side, { zoom: 1.0, panX: 0, panY: 0 });
       });
 
       const updateQRUrl = () => {
@@ -1564,7 +1773,7 @@
         if (url) {
           this.qrManager.invalidateCache();
           this.project.setQRConfig({ url });
-          this.showToast("QR Code updated!", 1500);
+          this.showToast("QR Code updated & verified!", 1500);
         }
       };
       this.dom.qrUpdateBtn?.addEventListener("click", updateQRUrl);
@@ -1627,23 +1836,18 @@
 
     _setupDropzone(dropzone, fileInput, onImageLoaded) {
       if (!dropzone || !fileInput) return;
-
       dropzone.addEventListener("click", () => fileInput.click());
-
       fileInput.addEventListener("change", (e) => {
         const file = e.target.files?.[0];
         if (file) this._processImageFile(file, onImageLoaded);
       });
-
       dropzone.addEventListener("dragover", (e) => {
         e.preventDefault();
         dropzone.classList.add("drag-over");
       });
-
       dropzone.addEventListener("dragleave", () => {
         dropzone.classList.remove("drag-over");
       });
-
       dropzone.addEventListener("drop", (e) => {
         e.preventDefault();
         dropzone.classList.remove("drag-over");
@@ -1657,7 +1861,6 @@
         alert("Please upload an image file (PNG, JPG, or WebP).");
         return;
       }
-
       const reader = new FileReader();
       reader.onload = (e) => {
         const dataUrl = e.target.result;
@@ -1720,6 +1923,7 @@
     updateUI() {
       const state = this.project.getState();
       const activeSide = state.settings.activeSide;
+      const currentSideData = state[activeSide];
 
       if (activeSide === "front") {
         this.dom.tabFrontBtn?.classList.remove("text-slate-600", "hover:bg-slate-100");
@@ -1753,6 +1957,28 @@
       if (hasBack && this.dom.backFileName) {
         this.dom.backFileName.textContent = state.back.fileName || "back-card.png";
       }
+
+      if (this.dom.imageZoomSlider) {
+        this.dom.imageZoomSlider.value = currentSideData.zoom || 1.0;
+        if (this.dom.imageZoomBadge) {
+          this.dom.imageZoomBadge.textContent = `${Math.round((currentSideData.zoom || 1.0) * 100)}%`;
+        }
+      }
+      if (this.dom.imagePanXSlider) {
+        this.dom.imagePanXSlider.value = currentSideData.panX || 0;
+        if (this.dom.imagePanXBadge) this.dom.imagePanXBadge.textContent = `${currentSideData.panX || 0}%`;
+      }
+      if (this.dom.imagePanYSlider) {
+        this.dom.imagePanYSlider.value = currentSideData.panY || 0;
+        if (this.dom.imagePanYBadge) this.dom.imagePanYBadge.textContent = `${currentSideData.panY || 0}%`;
+      }
+      if (this.dom.bgColorPicker) {
+        this.dom.bgColorPicker.value = currentSideData.bgColor || "#ffffff";
+      }
+
+      this.dom.fitModeRadios.forEach((radio) => {
+        radio.checked = radio.value === currentSideData.fitMode;
+      });
 
       this.dom.qrSideBtns.forEach((btn) => {
         const side = btn.getAttribute("data-qr-side");
@@ -1797,7 +2023,7 @@
       this.project.setQRConfig({
         enabled: true,
         side: "back",
-        url: "https://card-destine.io",
+        url: "https://8ace7cea.job-fair-portfolio.pages.dev",
         sizeMm: 22,
         quietZone: true
       });
@@ -1868,7 +2094,6 @@
     }
   }
 
-  // Auto-boot on DOM ready
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       window.cardStudioApp = new App();

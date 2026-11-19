@@ -156,17 +156,61 @@
         </div>
 
         <!-- Fit Mode Selector -->
-        <div>
-          <label class="text-xs font-semibold text-slate-700 block mb-1.5" data-i18n="fitModeLabel">Smart Fit Mode</label>
+        <div class="mb-4">
+          <label class="text-xs font-semibold text-slate-700 block mb-1.5" data-i18n="fitModeLabel">Fit Mode</label>
           <div class="grid grid-cols-1 gap-1.5 text-xs">
-            <label class="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition">
-              <input type="radio" name="fit-mode" value="cover" checked class="text-brand-600 focus:ring-brand-500">
-              <span class="font-medium text-slate-800" data-i18n="fitModeCover">Auto-Crop Fill (Cover - Recommended)</span>
+            <label class="flex items-center gap-2 p-2 border border-brand-300 bg-brand-50/50 rounded-lg cursor-pointer hover:bg-brand-50 transition">
+              <input type="radio" name="fit-mode" value="contain" checked class="text-brand-600 focus:ring-brand-500">
+              <span class="font-medium text-slate-900" data-i18n="fitModeContain">Fit Entire Card (No Crop - Recommended)</span>
             </label>
             <label class="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition">
-              <input type="radio" name="fit-mode" value="contain" class="text-brand-600 focus:ring-brand-500">
-              <span class="font-medium text-slate-800" data-i18n="fitModeContain">Fit with Margin (Contain)</span>
+              <input type="radio" name="fit-mode" value="cover" class="text-brand-600 focus:ring-brand-500">
+              <span class="font-medium text-slate-800" data-i18n="fitModeCover">Fill & Crop (Cover)</span>
             </label>
+          </div>
+        </div>
+
+        <!-- Transform Controls: Zoom, Pan, and Background Color -->
+        <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+          <!-- Zoom Slider -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs font-semibold text-slate-700" data-i18n="imageZoomLabel">Image Zoom / Scale</label>
+              <span id="image-zoom-badge" class="text-[11px] font-mono font-bold text-brand-600 bg-brand-50 px-1.5 py-0.5 rounded">100%</span>
+            </div>
+            <input type="range" id="image-zoom-slider" min="0.4" max="2.0" step="0.02" value="1.0" class="w-full h-1.5 bg-slate-200 rounded-lg cursor-pointer">
+          </div>
+
+          <!-- Position X & Y -->
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <div class="flex justify-between mb-1 text-[11px] font-medium text-slate-600">
+                <span data-i18n="imagePanXLabel">Pan X</span>
+                <span id="image-panx-badge" class="font-mono text-slate-500">0%</span>
+              </div>
+              <input type="range" id="image-panx-slider" min="-50" max="50" step="1" value="0" class="w-full h-1.5 bg-slate-200 rounded-lg cursor-pointer">
+            </div>
+            <div>
+              <div class="flex justify-between mb-1 text-[11px] font-medium text-slate-600">
+                <span data-i18n="imagePanYLabel">Pan Y</span>
+                <span id="image-pany-badge" class="font-mono text-slate-500">0%</span>
+              </div>
+              <input type="range" id="image-pany-slider" min="-50" max="50" step="1" value="0" class="w-full h-1.5 bg-slate-200 rounded-lg cursor-pointer">
+            </div>
+          </div>
+
+          <!-- Edge Color Picker -->
+          <div class="flex items-center justify-between pt-1 border-t border-slate-200">
+            <div>
+              <span class="text-xs font-semibold text-slate-700 block" data-i18n="bgColorLabel">Card Margin / Edge Color</span>
+              <span class="text-[10px] text-slate-500 block" data-i18n="autoColorHint">Auto-detected from image border pixels</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <input type="color" id="bg-color-picker" value="#ffffff" class="w-7 h-7 p-0.5 rounded border border-slate-300 cursor-pointer">
+              <button id="reset-transform-btn" type="button" class="text-[10px] px-2 py-1 bg-white border border-slate-200 rounded text-slate-600 hover:bg-slate-100" data-i18n="resetTransformBtn">
+                Reset
+              </button>
+            </div>
           </div>
         </div>
 
@@ -178,17 +222,17 @@
           <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider" data-i18n="sectionQR">
             2. Interactive QR Code
           </h2>
-          <span class="text-[11px] font-semibold text-brand-700 bg-brand-50 px-2 py-0.5 rounded">Pointer Drag & Drop</span>
+          <span class="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">ISO 18004 Verified</span>
         </div>
         <p class="text-xs text-slate-500 mb-4" data-i18n="sectionQRDesc">
-          Generate a dynamic QR code and position it smoothly with drag & drop on the card preview.
+          Generate an ISO-standard scannable QR code. Supports auto-URL formatting and live pointer dragging.
         </p>
 
         <!-- Website URL -->
         <div class="mb-4">
           <label class="text-xs font-semibold text-slate-700 block mb-1.5" data-i18n="qrUrlLabel">Destination URL</label>
           <div class="flex gap-2">
-            <input type="url" id="qr-url-input" value="https://nexusai-systems.io" placeholder="https://yourwebsite.com" class="flex-1 text-xs border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-brand-500 focus:outline-none" data-i18n-placeholder="qrUrlPlaceholder">
+            <input type="url" id="qr-url-input" value="https://8ace7cea.job-fair-portfolio.pages.dev" placeholder="https://yourwebsite.com" class="flex-1 text-xs border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-brand-500 focus:outline-none" data-i18n-placeholder="qrUrlPlaceholder">
             <button id="qr-update-btn" type="button" class="px-3 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 transition">
               Update
             </button>

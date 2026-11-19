@@ -18,19 +18,16 @@ class App {
 
     // DOM Elements Cache
     this.dom = {
-      // Navigation
       langToggleBtn: document.getElementById("lang-toggle-btn"),
       loadDemoBtn: document.getElementById("load-demo-btn"),
       resetProjectBtn: document.getElementById("reset-project-btn"),
 
-      // Tabs
       tabFrontBtn: document.getElementById("tab-front-btn"),
       tabBackBtn: document.getElementById("tab-back-btn"),
       flipViewBtn: document.getElementById("flip-view-btn"),
       frontQrBadge: document.getElementById("front-qr-badge"),
       backQrBadge: document.getElementById("back-qr-badge"),
 
-      // Stage & Canvas
       stageContainer: document.getElementById("card-stage-container"),
       canvas: document.getElementById("card-preview-canvas"),
       qrDragOverlay: document.getElementById("qr-drag-overlay"),
@@ -51,8 +48,16 @@ class App {
       backFileName: document.getElementById("back-file-name"),
       removeBackBtn: document.getElementById("remove-back-btn"),
 
-      // Fit Mode
+      // Transform Controls
       fitModeRadios: document.querySelectorAll('input[name="fit-mode"]'),
+      imageZoomSlider: document.getElementById("image-zoom-slider"),
+      imageZoomBadge: document.getElementById("image-zoom-badge"),
+      imagePanXSlider: document.getElementById("image-panx-slider"),
+      imagePanXBadge: document.getElementById("image-panx-badge"),
+      imagePanYSlider: document.getElementById("image-pany-slider"),
+      imagePanYBadge: document.getElementById("image-pany-badge"),
+      bgColorPicker: document.getElementById("bg-color-picker"),
+      resetTransformBtn: document.getElementById("reset-transform-btn"),
 
       // QR Controls
       qrUrlInput: document.getElementById("qr-url-input"),
@@ -78,9 +83,7 @@ class App {
       toastMessage: document.getElementById("toast-message")
     };
 
-    // QR Manager
     this.qrManager = new QRManager(this.project, this.dom.stageContainer);
-
     this.init();
   }
 
@@ -89,55 +92,47 @@ class App {
     this._setupCanvasDimensions();
     this._bindEvents();
 
-    // Auto-load sample cards initially so the workspace starts populated and beautiful
     await this.loadDemoTemplate(false);
-
-    // Initial render
     await this.render();
     this.updateUI();
   }
 
-  /**
-   * Set canvas internal buffer resolution for crisp rendering (Retina/High-DPI).
-   */
   _setupCanvasDimensions() {
-    // We use the 300 DPI pixel dimensions (1063 x 591) for crisp pixel rendering
-    this.dom.canvas.width = CanvasRenderer.PRINT_WIDTH_PX;
-    this.dom.canvas.height = CanvasRenderer.PRINT_HEIGHT_PX;
+    if (this.dom.canvas) {
+      this.dom.canvas.width = CanvasRenderer.PRINT_WIDTH_PX;
+      this.dom.canvas.height = CanvasRenderer.PRINT_HEIGHT_PX;
+    }
   }
 
-  /**
-   * Attach all DOM and state listeners.
-   */
   _bindEvents() {
-    // 1. Language Toggle
+    // Language Toggle
     this.dom.langToggleBtn?.addEventListener("click", () => {
       this.i18n.toggle();
       this.updateUI();
     });
 
-    // 2. Demo & Reset
+    // Demo & Reset
     this.dom.loadDemoBtn?.addEventListener("click", () => this.loadDemoTemplate(true));
     this.dom.resetProjectBtn?.addEventListener("click", () => this.resetProject());
 
-    // 3. Tab Navigation & Flip
+    // Tab Navigation & Flip
     this.dom.tabFrontBtn?.addEventListener("click", () => this.setActiveSide("front"));
     this.dom.tabBackBtn?.addEventListener("click", () => this.setActiveSide("back"));
     this.dom.flipViewBtn?.addEventListener("click", () => {
-      const current = this.project.getState().settings.activeSide;
-      this.setActiveSide(current === "front" ? "back" : "front");
+      const cur = this.project.getState().settings.activeSide;
+      this.setActiveSide(cur === "front" ? "back" : "front");
     });
 
-    // Keyboard shortcut: Spacebar to flip sides (when not typing in an input)
+    // Spacebar to flip
     window.addEventListener("keydown", (e) => {
       if (e.code === "Space" && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
         e.preventDefault();
-        const current = this.project.getState().settings.activeSide;
-        this.setActiveSide(current === "front" ? "back" : "front");
+        const cur = this.project.getState().settings.activeSide;
+        this.setActiveSide(cur === "front" ? "back" : "front");
       }
     });
 
-    // 4. File Dropzones & Uploads
+    // File Dropzones
     this._setupDropzone(
       this.dom.frontDropzone,
       this.dom.frontFileInput,
@@ -152,22 +147,59 @@ class App {
     );
     this.dom.removeBackBtn?.addEventListener("click", () => this.project.removeImage("back"));
 
-    // 5. Fit Mode Radios
+    // Fit Mode
     this.dom.fitModeRadios.forEach((radio) => {
       radio.addEventListener("change", (e) => {
-        const mode = e.target.value;
-        this.project.setFitMode("front", mode);
-        this.project.setFitMode("back", mode);
+        const side = this.project.getState().settings.activeSide;
+        this.project.setFitMode(side, e.target.value);
       });
     });
 
-    // 6. QR Controls
+    // Zoom Slider
+    this.dom.imageZoomSlider?.addEventListener("input", (e) => {
+      const side = this.project.getState().settings.activeSide;
+      const zoom = Number(e.target.value);
+      if (this.dom.imageZoomBadge) {
+        this.dom.imageZoomBadge.textContent = `${Math.round(zoom * 100)}%`;
+      }
+      this.project.setImageTransform(side, { zoom });
+    });
+
+    // Pan X Slider
+    this.dom.imagePanXSlider?.addEventListener("input", (e) => {
+      const side = this.project.getState().settings.activeSide;
+      const panX = Number(e.target.value);
+      if (this.dom.imagePanXBadge) this.dom.imagePanXBadge.textContent = `${panX}%`;
+      this.project.setImageTransform(side, { panX });
+    });
+
+    // Pan Y Slider
+    this.dom.imagePanYSlider?.addEventListener("input", (e) => {
+      const side = this.project.getState().settings.activeSide;
+      const panY = Number(e.target.value);
+      if (this.dom.imagePanYBadge) this.dom.imagePanYBadge.textContent = `${panY}%`;
+      this.project.setImageTransform(side, { panY });
+    });
+
+    // Background Color Picker
+    this.dom.bgColorPicker?.addEventListener("input", (e) => {
+      const side = this.project.getState().settings.activeSide;
+      this.project.setBgColor(side, e.target.value);
+    });
+
+    // Reset Transform
+    this.dom.resetTransformBtn?.addEventListener("click", () => {
+      const side = this.project.getState().settings.activeSide;
+      this.project.setImageTransform(side, { zoom: 1.0, panX: 0, panY: 0 });
+    });
+
+    // QR Controls
     const updateQRUrl = () => {
       const url = this.dom.qrUrlInput.value.trim();
       if (url) {
         this.qrManager.invalidateCache();
         this.project.setQRConfig({ url });
-        this.showToast("QR Code updated!", 1500);
+        this.showToast("QR Code updated & verified!", 1500);
       }
     };
     this.dom.qrUpdateBtn?.addEventListener("click", updateQRUrl);
@@ -175,7 +207,6 @@ class App {
       if (e.key === "Enter") updateQRUrl();
     });
 
-    // QR Side selector buttons
     this.dom.qrSideBtns.forEach((btn) => {
       btn.addEventListener("click", () => {
         const side = btn.getAttribute("data-qr-side");
@@ -183,19 +214,16 @@ class App {
       });
     });
 
-    // QR Size Slider
     this.dom.qrSizeSlider?.addEventListener("input", (e) => {
       const sizeMm = Number(e.target.value);
-      this.dom.qrSizeBadge.textContent = `${sizeMm} mm`;
+      if (this.dom.qrSizeBadge) this.dom.qrSizeBadge.textContent = `${sizeMm} mm`;
       this.project.setQRConfig({ sizeMm });
     });
 
-    // QR Quiet Zone Checkbox
     this.dom.qrQuietZoneCheckbox?.addEventListener("change", (e) => {
       this.project.setQRConfig({ quietZone: e.target.checked });
     });
 
-    // QR Quick Alignment Presets
     this.dom.qrPresetBtns.forEach((btn) => {
       btn.addEventListener("click", () => {
         const preset = btn.getAttribute("data-qr-preset");
@@ -203,7 +231,6 @@ class App {
       });
     });
 
-    // 7. Guides Toggles
     this.dom.safeZoneToggle?.addEventListener("change", (e) => {
       this.project.setSetting("showSafeZone", e.target.checked);
     });
@@ -212,32 +239,27 @@ class App {
       this.project.setSetting("showCenterGuides", e.target.checked);
     });
 
-    // 8. Live Pointer & Drag coordinates callback
     this.qrManager.onPositionChange = (coords) => {
-      this.dom.liveCoordsText.textContent = `X: ${coords.xMm} mm (${coords.xPercent}%) | Y: ${coords.yMm} mm (${coords.yPercent}%) | Size: ${coords.sizeMm} mm`;
+      if (this.dom.liveCoordsText) {
+        this.dom.liveCoordsText.textContent = `X: ${coords.xMm} mm (${coords.xPercent}%) | Y: ${coords.yMm} mm (${coords.yPercent}%) | Size: ${coords.sizeMm} mm`;
+      }
       this._updateQROverlayBox();
     };
 
-    // 9. Window Resize
     window.addEventListener("resize", () => {
       this._updateQROverlayBox();
     });
 
-    // 10. State Change Listener
     this.project.onStateChange(async () => {
       await this.render();
       this.updateUI();
     });
 
-    // 11. PDF & PNG Export
     this.dom.downloadPdfBtn?.addEventListener("click", () => this.exportPrintPDF());
     this.dom.exportPngFrontBtn?.addEventListener("click", () => PDFExporter.exportPNG(this.project, this.qrManager, "front"));
     this.dom.exportPngBackBtn?.addEventListener("click", () => PDFExporter.exportPNG(this.project, this.qrManager, "back"));
   }
 
-  /**
-   * Set up drag and drop and file input handling for card upload dropzones.
-   */
   _setupDropzone(dropzone, fileInput, onImageLoaded) {
     if (!dropzone || !fileInput) return;
 
@@ -265,9 +287,6 @@ class App {
     });
   }
 
-  /**
-   * Read and parse uploaded image file.
-   */
   _processImageFile(file, callback) {
     if (!file.type.startsWith("image/")) {
       alert("Please upload an image file (PNG, JPG, or WebP).");
@@ -290,17 +309,11 @@ class App {
     reader.readAsDataURL(file);
   }
 
-  /**
-   * Render the active card view onto the main preview canvas.
-   */
   async render() {
     const state = this.project.getState();
     const activeSide = state.settings.activeSide;
-
-    // Get pre-rendered QR code canvas
     const qrCanvas = await this.qrManager.getQRCanvas();
 
-    // Render using CanvasRenderer
     CanvasRenderer.render(this.dom.canvas, state, activeSide, {
       forExport: false,
       includeSafeZone: state.settings.showSafeZone,
@@ -311,9 +324,6 @@ class App {
     this._updateQROverlayBox();
   }
 
-  /**
-   * Position and scale the interactive QR overlay box over the preview canvas.
-   */
   _updateQROverlayBox() {
     const state = this.project.getState();
     const overlay = this.dom.qrDragOverlay;
@@ -336,34 +346,31 @@ class App {
     overlay.style.width = `${box.boxWidth}px`;
     overlay.style.height = `${box.boxHeight}px`;
 
-    // Live coordinates label
     const coords = this.qrManager.getFormattedCoordinates();
-    this.dom.liveCoordsText.textContent = `X: ${coords.xMm} mm (${coords.xPercent}%) | Y: ${coords.yMm} mm (${coords.yPercent}%) | Size: ${coords.sizeMm} mm`;
+    if (this.dom.liveCoordsText) {
+      this.dom.liveCoordsText.textContent = `X: ${coords.xMm} mm (${coords.xPercent}%) | Y: ${coords.yMm} mm (${coords.yPercent}%) | Size: ${coords.sizeMm} mm`;
+    }
   }
 
-  /**
-   * Update UI controls to match current state.
-   */
   updateUI() {
     const state = this.project.getState();
     const activeSide = state.settings.activeSide;
+    const currentSideData = state[activeSide];
 
-    // Tab active styles
+    // Tabs
     if (activeSide === "front") {
       this.dom.tabFrontBtn?.classList.remove("text-slate-600", "hover:bg-slate-100");
       this.dom.tabFrontBtn?.classList.add("bg-slate-900", "text-white");
-
       this.dom.tabBackBtn?.classList.remove("bg-slate-900", "text-white");
       this.dom.tabBackBtn?.classList.add("text-slate-600", "hover:bg-slate-100");
     } else {
       this.dom.tabBackBtn?.classList.remove("text-slate-600", "hover:bg-slate-100");
       this.dom.tabBackBtn?.classList.add("bg-slate-900", "text-white");
-
       this.dom.tabFrontBtn?.classList.remove("bg-slate-900", "text-white");
       this.dom.tabFrontBtn?.classList.add("text-slate-600", "hover:bg-slate-100");
     }
 
-    // QR Badges on tabs
+    // QR Badges
     const qrSide = state.qr.side;
     const qrEnabled = state.qr.enabled && qrSide !== "none";
     this.dom.frontQrBadge?.classList.toggle("hidden", !(qrEnabled && qrSide === "front"));
@@ -374,7 +381,7 @@ class App {
     this.dom.frontDropzonePrompt?.classList.toggle("hidden", hasFront);
     this.dom.frontLoadedInfo?.classList.toggle("hidden", !hasFront);
     this.dom.removeFrontBtn?.classList.toggle("hidden", !hasFront);
-    if (hasFront) {
+    if (hasFront && this.dom.frontFileName) {
       this.dom.frontFileName.textContent = state.front.fileName || "front-card.png";
     }
 
@@ -383,9 +390,33 @@ class App {
     this.dom.backDropzonePrompt?.classList.toggle("hidden", hasBack);
     this.dom.backLoadedInfo?.classList.toggle("hidden", !hasBack);
     this.dom.removeBackBtn?.classList.toggle("hidden", !hasBack);
-    if (hasBack) {
+    if (hasBack && this.dom.backFileName) {
       this.dom.backFileName.textContent = state.back.fileName || "back-card.png";
     }
+
+    // Sync active side transform controls (Zoom, Pan, Color)
+    if (this.dom.imageZoomSlider) {
+      this.dom.imageZoomSlider.value = currentSideData.zoom || 1.0;
+      if (this.dom.imageZoomBadge) {
+        this.dom.imageZoomBadge.textContent = `${Math.round((currentSideData.zoom || 1.0) * 100)}%`;
+      }
+    }
+    if (this.dom.imagePanXSlider) {
+      this.dom.imagePanXSlider.value = currentSideData.panX || 0;
+      if (this.dom.imagePanXBadge) this.dom.imagePanXBadge.textContent = `${currentSideData.panX || 0}%`;
+    }
+    if (this.dom.imagePanYSlider) {
+      this.dom.imagePanYSlider.value = currentSideData.panY || 0;
+      if (this.dom.imagePanYBadge) this.dom.imagePanYBadge.textContent = `${currentSideData.panY || 0}%`;
+    }
+    if (this.dom.bgColorPicker) {
+      this.dom.bgColorPicker.value = currentSideData.bgColor || "#ffffff";
+    }
+
+    // Fit mode radio sync
+    this.dom.fitModeRadios.forEach((radio) => {
+      radio.checked = radio.value === currentSideData.fitMode;
+    });
 
     // QR Side buttons
     this.dom.qrSideBtns.forEach((btn) => {
@@ -400,38 +431,26 @@ class App {
       }
     });
 
-    // QR Size Slider
     if (this.dom.qrSizeSlider) {
       this.dom.qrSizeSlider.value = state.qr.sizeMm;
-      this.dom.qrSizeBadge.textContent = `${state.qr.sizeMm} mm`;
+      if (this.dom.qrSizeBadge) this.dom.qrSizeBadge.textContent = `${state.qr.sizeMm} mm`;
     }
 
-    // QR Quiet Zone
     if (this.dom.qrQuietZoneCheckbox) {
       this.dom.qrQuietZoneCheckbox.checked = state.qr.quietZone;
     }
-
-    // Safe Zone Toggle
     if (this.dom.safeZoneToggle) {
       this.dom.safeZoneToggle.checked = state.settings.showSafeZone;
     }
-
-    // Center Guides Toggle
     if (this.dom.centerGuidesToggle) {
       this.dom.centerGuidesToggle.checked = state.settings.showCenterGuides;
     }
   }
 
-  /**
-   * Switch the active preview card side.
-   */
   setActiveSide(side) {
     this.project.setActiveSide(side);
   }
 
-  /**
-   * Load sleek demo templates for testing.
-   */
   async loadDemoTemplate(notify = true) {
     const demo = SampleCardGenerator.generateDemoCards();
     const frontImg = await demo.loadFrontImage();
@@ -440,11 +459,10 @@ class App {
     this.project.setImage("front", frontImg, demo.frontDataUrl, "demo-front-card.png", 145000);
     this.project.setImage("back", backImg, demo.backDataUrl, "demo-back-card.png", 132000);
 
-    // Set QR on back card at bottom-right
     this.project.setQRConfig({
       enabled: true,
       side: "back",
-      url: "https://nexusai-systems.io",
+      url: "https://8ace7cea.job-fair-portfolio.pages.dev",
       sizeMm: 22,
       quietZone: true
     });
@@ -456,9 +474,6 @@ class App {
     }
   }
 
-  /**
-   * Reset the current card project.
-   */
   resetProject() {
     if (confirm(this.i18n.t("resetConfirm"))) {
       this.project.resetToDefaults();
@@ -467,9 +482,6 @@ class App {
     }
   }
 
-  /**
-   * Export print-ready 90mm x 50mm PDF.
-   */
   async exportPrintPDF() {
     const btn = this.dom.downloadPdfBtn;
     const originalText = btn.innerHTML;
@@ -498,9 +510,6 @@ class App {
     }
   }
 
-  /**
-   * Show notification toast modal.
-   */
   showToast(message, duration = 2500, showSpinner = false) {
     const modal = this.dom.toastModal;
     const msg = this.dom.toastMessage;

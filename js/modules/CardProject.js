@@ -1,22 +1,20 @@
 /**
  * CardProject.js
  * State management for Double-Sided Business Card Project (90mm x 50mm).
- * Extensible for V2/V3 features (layers, vCards, local storage, CSV import).
+ * Now supports Pan & Zoom, Auto Edge Color detection, and ISO QR standards.
  */
 
 export class CardProject {
-  static VERSION = "1.0";
+  static VERSION = "1.1";
   static DEFAULT_DIMENSIONS = {
     widthMm: 90,
     heightMm: 50,
     dpi: 300,
     get pixelWidth() {
-      // 90mm / 25.4 * 300 = 1062.992 => 1063px
-      return Math.round((this.widthMm / 25.4) * this.dpi);
+      return Math.round((this.widthMm / 25.4) * this.dpi); // 1063px
     },
     get pixelHeight() {
-      // 50mm / 25.4 * 300 = 590.551 => 591px
-      return Math.round((this.heightMm / 25.4) * this.dpi);
+      return Math.round((this.heightMm / 25.4) * this.dpi); // 591px
     },
     get aspectRatio() {
       return this.widthMm / this.heightMm; // 1.8
@@ -32,10 +30,6 @@ export class CardProject {
     }
   }
 
-  /**
-   * Reset the project state to default clean values.
-   * @param {boolean} notify - whether to trigger state change listeners
-   */
   resetToDefaults(notify = true) {
     this.state = {
       version: CardProject.VERSION,
@@ -51,11 +45,14 @@ export class CardProject {
         safeZoneMarginMm: 3
       },
       front: {
-        image: null,      // Image / HTMLImageElement or null
-        dataUrl: null,    // base64 data string
+        image: null,
+        dataUrl: null,
         fileName: "",
         fileSize: 0,
-        fitMode: "cover", // "cover" | "contain"
+        fitMode: "contain", // default to contain/safe fit so no text is cut
+        zoom: 1.0,          // 0.5 to 2.5
+        panX: 0,            // -50% to +50%
+        panY: 0,            // -50% to +50%
         bgColor: "#ffffff"
       },
       back: {
@@ -63,28 +60,31 @@ export class CardProject {
         dataUrl: null,
         fileName: "",
         fileSize: 0,
-        fitMode: "cover",
+        fitMode: "contain",
+        zoom: 1.0,
+        panX: 0,
+        panY: 0,
         bgColor: "#ffffff"
       },
       qr: {
         enabled: true,
-        side: "back",     // "front" | "back" | "none"
-        url: "https://example.com",
-        sizeMm: 22,       // 10mm to 35mm
-        xPercent: 70,     // Top-left X normalized percentage (0-100)
-        yPercent: 50,     // Top-left Y normalized percentage (0-100)
-        quietZone: true,  // Clean white padding background
+        side: "back",
+        url: "https://8ace7cea.job-fair-portfolio.pages.dev",
+        sizeMm: 22,
+        xPercent: 70,
+        yPercent: 50,
+        quietZone: true,
         quietZonePaddingMm: 1.5,
         colorDark: "#0f172a",
         colorLight: "#ffffff",
-        errorCorrectionLevel: "H" // L, M, Q, H
+        errorCorrectionLevel: "M"
       },
       settings: {
         showSafeZone: true,
         showCenterGuides: false,
-        activeSide: "front" // "front" | "back"
+        activeSide: "front"
       },
-      layers: [] // Extensibility hook for V2 (text items, icons, badges)
+      layers: []
     };
 
     if (notify) {
@@ -93,18 +93,11 @@ export class CardProject {
     }
   }
 
-  /**
-   * Event Emitter: subscribe to project events.
-   * @param {string} event - event name
-   * @param {Function} callback - listener callback
-   * @returns {Function} unsubscribe function
-   */
   subscribe(event, callback) {
     if (!this._listeners.has(event)) {
       this._listeners.set(event, new Set());
     }
     this._listeners.get(event).add(callback);
-
     return () => this.unsubscribe(event, callback);
   }
 
@@ -122,39 +115,26 @@ export class CardProject {
     this.unsubscribe(event, callback);
   }
 
-  /**
-   * Helper specifically for state changes.
-   */
   onStateChange(callback) {
     return this.subscribe("stateChange", callback);
   }
 
-  /**
-   * Emit an event to registered listeners.
-   */
   emit(event, data) {
     if (this._listeners.has(event)) {
       for (const listener of this._listeners.get(event)) {
         try {
           listener(data);
         } catch (err) {
-          console.error(`[CardProject] Error in listener for event "${event}":`, err);
+          console.error(`[CardProject] Error in listener "${event}":`, err);
         }
       }
     }
   }
 
-  /**
-   * Return a snapshot copy of current state.
-   */
   getState() {
     return this.state;
   }
 
-  /**
-   * Update active side preview.
-   * @param {"front" | "back"} side
-   */
   setActiveSide(side) {
     if (side !== "front" && side !== "back") return;
     if (this.state.settings.activeSide === side) return;
@@ -165,13 +145,46 @@ export class CardProject {
   }
 
   /**
-   * Set card image for front or back.
-   * @param {"front" | "back"} side
-   * @param {HTMLImageElement|null} image
-   * @param {string|null} dataUrl
-   * @param {string} [fileName=""]
-   * @param {number} [fileSize=0]
+   * Automatically sample image border pixels to find dominant edge color.
    */
+  static detectEdgeColor(image) {
+    if (!image || !image.naturalWidth || !image.naturalHeight || typeof document === "undefined") {
+      return "#ffffff";
+    }
+
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.min(64, image.naturalWidth);
+      canvas.height = Math.min(64, image.naturalHeight);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+      let r = 0, g = 0, b = 0, count = 0;
+      // Top and bottom edges
+      for (let x = 0; x < canvas.width; x += 2) {
+        let idx = (0 * canvas.width + x) * 4;
+        r += data[idx]; g += data[idx + 1]; b += data[idx + 2]; count++;
+        idx = ((canvas.height - 1) * canvas.width + x) * 4;
+        r += data[idx]; g += data[idx + 1]; b += data[idx + 2]; count++;
+      }
+      // Left and right edges
+      for (let y = 0; y < canvas.height; y += 2) {
+        let idx = (y * canvas.width + 0) * 4;
+        r += data[idx]; g += data[idx + 1]; b += data[idx + 2]; count++;
+        idx = (y * canvas.width + (canvas.width - 1)) * 4;
+        r += data[idx]; g += data[idx + 1]; b += data[idx + 2]; count++;
+      }
+
+      r = Math.round(r / count);
+      g = Math.round(g / count);
+      b = Math.round(b / count);
+      return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+    } catch (e) {
+      return "#ffffff";
+    }
+  }
+
   setImage(side, image, dataUrl, fileName = "", fileSize = 0) {
     if (side !== "front" && side !== "back") return;
 
@@ -179,39 +192,56 @@ export class CardProject {
     this.state[side].dataUrl = dataUrl;
     this.state[side].fileName = fileName;
     this.state[side].fileSize = fileSize;
-    this.state.metadata.updatedAt = new Date().toISOString();
 
+    // Reset pan & zoom defaults for fresh image
+    this.state[side].zoom = 1.0;
+    this.state[side].panX = 0;
+    this.state[side].panY = 0;
+
+    // Detect and set edge color automatically
+    if (image) {
+      const detectedColor = CardProject.detectEdgeColor(image);
+      this.state[side].bgColor = detectedColor;
+    }
+
+    this.state.metadata.updatedAt = new Date().toISOString();
     this.emit("stateChange", this.state);
     this.emit("imageChange", { side, hasImage: !!dataUrl, fileName });
   }
 
-  /**
-   * Remove card image for front or back.
-   * @param {"front" | "back"} side
-   */
   removeImage(side) {
-    this.setImage(side, null, null, "", 0);
+    if (side !== "front" && side !== "back") return;
+    this.state[side].image = null;
+    this.state[side].dataUrl = null;
+    this.state[side].fileName = "";
+    this.state[side].fileSize = 0;
+    this.state[side].zoom = 1.0;
+    this.state[side].panX = 0;
+    this.state[side].panY = 0;
+    this.state.metadata.updatedAt = new Date().toISOString();
+    this.emit("stateChange", this.state);
   }
 
-  /**
-   * Set fit mode ("cover" vs "contain")
-   * @param {"front" | "back"} side
-   * @param {"cover" | "contain"} mode
-   */
+  setImageTransform(side, { zoom, panX, panY, fitMode, bgColor }) {
+    if (side !== "front" && side !== "back") return;
+
+    if (zoom !== undefined) this.state[side].zoom = Math.max(0.4, Math.min(2.5, Number(zoom) || 1.0));
+    if (panX !== undefined) this.state[side].panX = Math.max(-50, Math.min(50, Number(panX) || 0));
+    if (panY !== undefined) this.state[side].panY = Math.max(-50, Math.min(50, Number(panY) || 0));
+    if (fitMode !== undefined) this.state[side].fitMode = fitMode;
+    if (bgColor !== undefined) this.state[side].bgColor = bgColor;
+
+    this.state.metadata.updatedAt = new Date().toISOString();
+    this.emit("stateChange", this.state);
+  }
+
   setFitMode(side, mode) {
     if (side !== "front" && side !== "back") return;
-    if (mode !== "cover" && mode !== "contain") return;
-
     this.state[side].fitMode = mode;
     this.state.metadata.updatedAt = new Date().toISOString();
     this.emit("stateChange", this.state);
   }
 
-  /**
-   * Set background color for contain mode.
-   * @param {"front" | "back"} side
-   * @param {string} color
-   */
   setBgColor(side, color) {
     if (side !== "front" && side !== "back") return;
     this.state[side].bgColor = color;
@@ -219,14 +249,8 @@ export class CardProject {
     this.emit("stateChange", this.state);
   }
 
-  /**
-   * Update QR configuration.
-   * @param {Partial<typeof this.state.qr>} updates
-   */
   setQRConfig(updates) {
     Object.assign(this.state.qr, updates);
-
-    // Validate & clamp
     this.state.qr.sizeMm = Math.max(10, Math.min(35, Number(this.state.qr.sizeMm) || 20));
     this.clampQRCoordinates();
 
@@ -235,12 +259,6 @@ export class CardProject {
     this.emit("qrChange", this.state.qr);
   }
 
-  /**
-   * Set QR position using normalized percentages (0-100%).
-   * Automatically clamps so QR stays within card boundary.
-   * @param {number} xPercent - normalized 0-100% of card width
-   * @param {number} yPercent - normalized 0-100% of card height
-   */
   setQRPosition(xPercent, yPercent) {
     this.state.qr.xPercent = xPercent;
     this.state.qr.yPercent = yPercent;
@@ -251,15 +269,11 @@ export class CardProject {
     this.emit("qrMove", { xPercent: this.state.qr.xPercent, yPercent: this.state.qr.yPercent });
   }
 
-  /**
-   * Clamp QR normalized coordinates so it cannot be placed outside the card canvas.
-   */
   clampQRCoordinates() {
     const cardWidthMm = this.state.dimensions.widthMm;
     const cardHeightMm = this.state.dimensions.heightMm;
     const qrSizeMm = this.state.qr.sizeMm;
 
-    // Convert QR size to percentage of card width and height
     const sizePercentX = (qrSizeMm / cardWidthMm) * 100;
     const sizePercentY = (qrSizeMm / cardHeightMm) * 100;
 
@@ -270,10 +284,6 @@ export class CardProject {
     this.state.qr.yPercent = Math.max(0, Math.min(maxY, this.state.qr.yPercent));
   }
 
-  /**
-   * Quick alignment presets for QR code.
-   * @param {"bottom-right" | "bottom-left" | "top-right" | "top-left" | "center"} preset
-   */
   setQRPresetPosition(preset) {
     const cardWidthMm = this.state.dimensions.widthMm;
     const cardHeightMm = this.state.dimensions.heightMm;
@@ -314,20 +324,11 @@ export class CardProject {
     this.emit("qrMove", { xPercent: this.state.qr.xPercent, yPercent: this.state.qr.yPercent });
   }
 
-  /**
-   * Toggle or set general settings.
-   * @param {string} key
-   * @param {*} value
-   */
   setSetting(key, value) {
     this.state.settings[key] = value;
     this.emit("stateChange", this.state);
   }
 
-  /**
-   * Serialize state into clean JSON for export or persistence.
-   * Omits DOM HTMLImageElements and keeps clean dataUrls.
-   */
   toJSON() {
     return JSON.stringify({
       version: this.state.version,
@@ -337,12 +338,18 @@ export class CardProject {
         dataUrl: this.state.front.dataUrl,
         fileName: this.state.front.fileName,
         fitMode: this.state.front.fitMode,
+        zoom: this.state.front.zoom,
+        panX: this.state.front.panX,
+        panY: this.state.front.panY,
         bgColor: this.state.front.bgColor
       },
       back: {
         dataUrl: this.state.back.dataUrl,
         fileName: this.state.back.fileName,
         fitMode: this.state.back.fitMode,
+        zoom: this.state.back.zoom,
+        panX: this.state.back.panX,
+        panY: this.state.back.panY,
         bgColor: this.state.back.bgColor
       },
       qr: { ...this.state.qr },
@@ -351,49 +358,24 @@ export class CardProject {
     }, null, 2);
   }
 
-  /**
-   * Restore state from JSON string or object.
-   * Rehydrates HTMLImageElements asynchronously.
-   * @param {string|object} json
-   * @param {boolean} notify
-   * @returns {Promise<void>}
-   */
   async fromJSON(json, notify = true) {
     const data = typeof json === "string" ? JSON.parse(json) : json;
-
-    if (!data || typeof data !== "object") {
-      throw new Error("Invalid project JSON data");
-    }
+    if (!data) return;
 
     this.state.version = data.version || CardProject.VERSION;
-    this.state.metadata = data.metadata || this.state.metadata;
     this.state.dimensions = { ...this.state.dimensions, ...(data.dimensions || {}) };
 
-    // Front image rehydration
     if (data.front) {
-      this.state.front.fileName = data.front.fileName || "";
-      this.state.front.fitMode = data.front.fitMode || "cover";
-      this.state.front.bgColor = data.front.bgColor || "#ffffff";
-      this.state.front.dataUrl = data.front.dataUrl || null;
-
+      this.state.front = { ...this.state.front, ...data.front };
       if (data.front.dataUrl) {
         this.state.front.image = await this._loadImage(data.front.dataUrl);
-      } else {
-        this.state.front.image = null;
       }
     }
 
-    // Back image rehydration
     if (data.back) {
-      this.state.back.fileName = data.back.fileName || "";
-      this.state.back.fitMode = data.back.fitMode || "cover";
-      this.state.back.bgColor = data.back.bgColor || "#ffffff";
-      this.state.back.dataUrl = data.back.dataUrl || null;
-
+      this.state.back = { ...this.state.back, ...data.back };
       if (data.back.dataUrl) {
         this.state.back.image = await this._loadImage(data.back.dataUrl);
-      } else {
-        this.state.back.image = null;
       }
     }
 
@@ -406,29 +388,20 @@ export class CardProject {
       this.state.settings = { ...this.state.settings, ...data.settings };
     }
 
-    if (Array.isArray(data.layers)) {
-      this.state.layers = data.layers;
-    }
-
     if (notify) {
       this.emit("stateChange", this.state);
-      this.emit("loaded", this.state);
     }
   }
 
-  /**
-   * Helper to load an image from dataUrl into an HTMLImageElement.
-   */
   _loadImage(dataUrl) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       if (typeof Image === "undefined") {
-        // Node / non-browser environment
         resolve(null);
         return;
       }
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = (e) => reject(new Error("Failed to load image data URL"));
+      img.onerror = () => resolve(null);
       img.src = dataUrl;
     });
   }
