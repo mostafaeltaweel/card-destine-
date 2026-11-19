@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CardStudio 90x50 - Print-Ready Business Card Designer</title>
+  
+  <!-- Google Fonts: Inter & Tajawal (for modern Arabic RTL) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0f9ff',
+              100: '#e0f2fe',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              700: '#0369a1',
+              900: '#0c4a6e'
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- External Libraries via reliable CDNs -->
+  <!-- 1. qrcodejs for crisp QR generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- 2. jsPDF for direct 90mm x 50mm PDF export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen flex flex-col selection:bg-brand-500 selection:text-white">
+
+  <!-- Top App Navigation Bar -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      
+      <!-- Logo & Title -->
+      <div class="flex items-center space-x-3 rtl:space-x-reverse">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-sky-400 flex items-center justify-center text-white shadow-md shadow-brand-500/20 font-bold text-lg tracking-wider">
+          90
+        </div>
+        <div>
+          <div class="flex items-center space-x-2 rtl:space-x-reverse">
+            <h1 class="text-base font-bold text-slate-900 tracking-tight" data-i18n="appTitle">CardStudio 90x50</h1>
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800">
+              300 DPI Press-Ready
+            </span>
+          </div>
+          <p class="text-xs text-slate-500 hidden sm:block" data-i18n="appSubtitle">Print-Ready Double-Sided Business Card Designer</p>
+        </div>
+      </div>
+
+      <!-- Quick Action Buttons -->
+      <div class="flex items-center space-x-2 sm:space-x-3 rtl:space-x-reverse">
+        <!-- Load Demo Template -->
+        <button id="load-demo-btn" type="button" class="inline-flex items-center px-3 py-1.5 border border-slate-200 text-xs font-semibold rounded-lg text-slate-700 bg-white hover:bg-slate-50 hover:border-slate-300 transition shadow-sm">
+          <svg class="w-4 h-4 mr-1.5 rtl:ml-1.5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+          </svg>
+          <span data-i18n="loadDemoBtn">Load Demo Template</span>
+        </button>
+
+        <!-- Reset Project -->
+        <button id="reset-project-btn" type="button" class="inline-flex items-center px-3 py-1.5 border border-slate-200 text-xs font-semibold rounded-lg text-slate-600 bg-white hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition shadow-sm" title="Reset Project">
+          <svg class="w-4 h-4 mr-1.5 rtl:ml-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+          </svg>
+          <span data-i18n="resetBtn">Reset</span>
+        </button>
+
+        <!-- Bilingual Language Switcher -->
+        <button id="lang-toggle-btn" type="button" class="inline-flex items-center space-x-1 rtl:space-x-reverse px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition">
+          <span>العربية</span>
+          <span class="text-xs opacity-75">🇸🇦</span>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- Workspace Container: Split Screen Desktop / Fluid Mobile -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row gap-6">
+
+    <!-- Left Controls Panel -->
+    <aside class="w-full lg:w-[420px] flex-shrink-0 flex flex-col gap-5">
+
+      <!-- Section 1: Card Artwork Upload -->
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2" data-i18n="sectionImages">
+            1. Card Artwork
+          </h2>
+          <span class="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">90 × 50 mm (1.8:1)</span>
+        </div>
+        <p class="text-xs text-slate-500 mb-4" data-i18n="sectionImagesDesc">
+          Upload Front and Back designs. Images automatically auto-crop to 90×50mm (1.8:1 aspect ratio).
+        </p>
+
+        <!-- Front Card Dropzone -->
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="text-xs font-semibold text-slate-700" data-i18n="frontUploadLabel">Front Side Image</label>
+            <button id="remove-front-btn" type="button" class="text-[11px] text-rose-500 hover:text-rose-700 font-medium hidden" data-i18n="removeBtn">Remove</button>
+          </div>
+          
+          <div id="front-dropzone" class="dropzone-box rounded-xl p-3 text-center cursor-pointer relative overflow-hidden group">
+            <input type="file" id="front-file-input" accept="image/png, image/jpeg, image/webp" class="hidden">
+            <div id="front-dropzone-prompt" class="py-2">
+              <svg class="mx-auto h-7 w-7 text-slate-400 group-hover:text-brand-500 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+              </svg>
+              <p class="text-xs text-slate-600 mt-1 font-medium" data-i18n="uploadPlaceholder">Click or drag & drop (PNG, JPG, WebP)</p>
+            </div>
+            <!-- Loaded image state badge -->
+            <div id="front-loaded-info" class="hidden text-xs text-emerald-700 bg-emerald-50 rounded-lg p-2 font-medium flex items-center justify-between">
+              <span id="front-file-name" class="truncate max-w-[200px]">front-card.png</span>
+              <span class="text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded">✓ Loaded</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Back Card Dropzone -->
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="text-xs font-semibold text-slate-700" data-i18n="backUploadLabel">Back Side Image</label>
+            <button id="remove-back-btn" type="button" class="text-[11px] text-rose-500 hover:text-rose-700 font-medium hidden" data-i18n="removeBtn">Remove</button>
+          </div>
+          
+          <div id="back-dropzone" class="dropzone-box rounded-xl p-3 text-center cursor-pointer relative overflow-hidden group">
+            <input type="file" id="back-file-input" accept="image/png, image/jpeg, image/webp" class="hidden">
+            <div id="back-dropzone-prompt" class="py-2">
+              <svg class="mx-auto h-7 w-7 text-slate-400 group-hover:text-brand-500 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+              </svg>
+              <p class="text-xs text-slate-600 mt-1 font-medium" data-i18n="uploadPlaceholder">Click or drag & drop (PNG, JPG, WebP)</p>
+            </div>
+            <!-- Loaded image state badge -->
+            <div id="back-loaded-info" class="hidden text-xs text-emerald-700 bg-emerald-50 rounded-lg p-2 font-medium flex items-center justify-between">
+              <span id="back-file-name" class="truncate max-w-[200px]">back-card.png</span>
+              <span class="text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded">✓ Loaded</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fit Mode Selector -->
+        <div>
+          <label class="text-xs font-semibold text-slate-700 block mb-1.5" data-i18n="fitModeLabel">Smart Fit Mode</label>
+          <div class="grid grid-cols-1 gap-1.5 text-xs">
+            <label class="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition">
+              <input type="radio" name="fit-mode" value="cover" checked class="text-brand-600 focus:ring-brand-500">
+              <span class="font-medium text-slate-800" data-i18n="fitModeCover">Auto-Crop Fill (Cover - Recommended)</span>
+            </label>
+            <label class="flex items-center gap-2 p-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50 transition">
+              <input type="radio" name="fit-mode" value="contain" class="text-brand-600 focus:ring-brand-500">
+              <span class="font-medium text-slate-800" data-i18n="fitModeContain">Fit with Margin (Contain)</span>
+            </label>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Section 2: Interactive Website QR Code -->
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider" data-i18n="sectionQR">
+            2. Interactive QR Code
+          </h2>
+          <span class="text-[11px] font-semibold text-brand-700 bg-brand-50 px-2 py-0.5 rounded">Pointer Drag & Drop</span>
+        </div>
+        <p class="text-xs text-slate-500 mb-4" data-i18n="sectionQRDesc">
+          Generate a dynamic QR code and position it smoothly with drag & drop on the card preview.
+        </p>
+
+        <!-- Website URL -->
+        <div class="mb-4">
+          <label class="text-xs font-semibold text-slate-700 block mb-1.5" data-i18n="qrUrlLabel">Destination URL</label>
+          <div class="flex gap-2">
+            <input type="url" id="qr-url-input" value="https://nexusai-systems.io" placeholder="https://yourwebsite.com" class="flex-1 text-xs border border-slate-300 rounded-lg px-3 py-2 text-slate-800 focus:ring-2 focus:ring-brand-500 focus:outline-none" data-i18n-placeholder="qrUrlPlaceholder">
+            <button id="qr-update-btn" type="button" class="px-3 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 transition">
+              Update
+            </button>
+          </div>
+        </div>
+
+        <!-- QR Placement Side -->
+        <div class="mb-4">
+          <label class="text-xs font-semibold text-slate-700 block mb-1.5" data-i18n="qrSideLabel">QR Placement Side</label>
+          <div class="grid grid-cols-3 gap-2 text-xs">
+            <button type="button" data-qr-side="back" class="qr-side-btn py-2 px-3 rounded-lg border font-medium text-center transition bg-brand-50 border-brand-500 text-brand-700" data-i18n="qrSideBack">
+              Back Card
+            </button>
+            <button type="button" data-qr-side="front" class="qr-side-btn py-2 px-3 rounded-lg border font-medium text-center transition bg-white border-slate-200 text-slate-600 hover:bg-slate-50" data-i18n="qrSideFront">
+              Front Card
+            </button>
+            <button type="button" data-qr-side="none" class="qr-side-btn py-2 px-3 rounded-lg border font-medium text-center transition bg-white border-slate-200 text-slate-600 hover:bg-slate-50" data-i18n="qrSideNone">
+              None
+            </button>
+          </div>
+        </div>
+
+        <!-- QR Size Slider (10mm to 35mm) -->
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="text-xs font-semibold text-slate-700" data-i18n="qrSizeLabel">QR Size (1:1 Ratio)</label>
+            <span id="qr-size-badge" class="text-xs font-mono font-bold text-brand-600 bg-brand-50 px-2 py-0.5 rounded">22 mm</span>
+          </div>
+          <input type="range" id="qr-size-slider" min="10" max="35" step="1" value="22" class="w-full h-1.5 bg-slate-200 rounded-lg cursor-pointer">
+          <div class="flex justify-between text-[10px] text-slate-400 mt-1">
+            <span>10 mm (Compact)</span>
+            <span>22 mm (Standard)</span>
+            <span>35 mm (Large)</span>
+          </div>
+        </div>
+
+        <!-- White Quiet-Zone Padding Box -->
+        <div class="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+          <label class="flex items-start gap-2.5 cursor-pointer">
+            <input type="checkbox" id="qr-quiet-zone-checkbox" checked class="mt-0.5 rounded text-brand-600 focus:ring-brand-500">
+            <div>
+              <span class="text-xs font-semibold text-slate-800 block" data-i18n="qrQuietZoneLabel">White Quiet-Zone Box</span>
+              <span class="text-[11px] text-slate-500 block leading-tight mt-0.5" data-i18n="qrQuietZoneHint">Adds white padding so QR scans easily on busy/dark designs</span>
+            </div>
+          </label>
+        </div>
+
+        <!-- Quick Snap Alignment Presets -->
+        <div>
+          <label class="text-xs font-semibold text-slate-700 block mb-1.5" data-i18n="quickAlignLabel">Quick Snap Presets</label>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-xs">
+            <button type="button" data-qr-preset="bottom-right" class="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 font-medium transition text-center" data-i18n="alignBottomRight">
+              Bottom-Right
+            </button>
+            <button type="button" data-qr-preset="bottom-left" class="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 font-medium transition text-center" data-i18n="alignBottomLeft">
+              Bottom-Left
+            </button>
+            <button type="button" data-qr-preset="top-right" class="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 font-medium transition text-center" data-i18n="alignTopRight">
+              Top-Right
+            </button>
+            <button type="button" data-qr-preset="center" class="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 font-medium transition text-center" data-i18n="alignCenter">
+              Center
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Section 3: Print Guides & Safety -->
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider mb-3" data-i18n="sectionGuides">
+          3. Print Guides & View
+        </h2>
+
+        <div class="space-y-3">
+          <label class="flex items-start gap-2.5 cursor-pointer">
+            <input type="checkbox" id="safe-zone-toggle" checked class="mt-0.5 rounded text-sky-500 focus:ring-sky-400">
+            <div>
+              <span class="text-xs font-semibold text-slate-800 block" data-i18n="safeZoneLabel">3mm Safe Cut Margin (Inner dashed line)</span>
+              <span class="text-[11px] text-slate-500 block leading-tight mt-0.5" data-i18n="safeZoneHint">Ensures text & logos aren't chopped off at the print shop (preview only)</span>
+            </div>
+          </label>
+
+          <label class="flex items-start gap-2.5 cursor-pointer">
+            <input type="checkbox" id="center-guides-toggle" class="mt-0.5 rounded text-indigo-500 focus:ring-indigo-400">
+            <div>
+              <span class="text-xs font-semibold text-slate-800 block" data-i18n="centerGuidesLabel">Center Alignment Crosshairs</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Export Actions Card -->
+      <div class="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-5 shadow-lg text-white">
+        <!-- Main Print-Ready PDF Button -->
+        <button id="download-pdf-btn" type="button" class="w-full py-3.5 px-4 bg-gradient-to-r from-sky-400 to-brand-500 hover:from-sky-300 hover:to-brand-400 text-slate-950 font-bold text-sm rounded-xl transition shadow-md shadow-brand-500/25 flex items-center justify-center gap-2 group">
+          <svg class="w-5 h-5 group-hover:scale-110 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+          </svg>
+          <span data-i18n="downloadPdfBtn">Download Print-Ready PDF (90×50mm)</span>
+        </button>
+
+        <p class="text-[11px] text-slate-400 text-center mt-2" data-i18n="downloadPdfHint">
+          300 DPI press-ready 2-page PDF with exact millimeter bounds
+        </p>
+
+        <!-- Secondary PNG proof buttons -->
+        <div class="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-slate-700/60">
+          <button id="export-png-front-btn" type="button" class="py-2 px-2 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 rounded-lg text-[11px] font-medium text-slate-200 transition text-center" data-i18n="exportPngFront">
+            Export Front PNG (300 DPI)
+          </button>
+          <button id="export-png-back-btn" type="button" class="py-2 px-2 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 rounded-lg text-[11px] font-medium text-slate-200 transition text-center" data-i18n="exportPngBack">
+            Export Back PNG (300 DPI)
+          </button>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- Right Main Stage (Interactive Preview Canvas) -->
+    <section class="flex-1 flex flex-col items-center">
+
+      <!-- View Switcher Tabs & Quick Flip -->
+      <div class="w-full max-w-2xl flex items-center justify-between mb-4 bg-white p-2 rounded-2xl border border-slate-200 shadow-sm">
+        <div class="flex items-center space-x-1.5 rtl:space-x-reverse">
+          <button id="tab-front-btn" type="button" class="px-4 py-2 rounded-xl text-xs font-bold transition bg-slate-900 text-white shadow-sm flex items-center gap-1.5">
+            <span data-i18n="frontCardTab">Front Card</span>
+            <span id="front-qr-badge" class="hidden text-[10px] bg-brand-500 text-white px-1.5 py-0.2 rounded font-semibold" data-i18n="qrBadge">QR</span>
+          </button>
+          <button id="tab-back-btn" type="button" class="px-4 py-2 rounded-xl text-xs font-semibold transition text-slate-600 hover:text-slate-900 hover:bg-slate-100 flex items-center gap-1.5">
+            <span data-i18n="backCardTab">Back Card</span>
+            <span id="back-qr-badge" class="hidden text-[10px] bg-brand-500 text-white px-1.5 py-0.2 rounded font-semibold" data-i18n="qrBadge">QR</span>
+          </button>
+        </div>
+
+        <!-- Quick Flip Button -->
+        <button id="flip-view-btn" type="button" class="inline-flex items-center px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition shadow-sm">
+          <svg class="w-4 h-4 mr-1 rtl:ml-1 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+          </svg>
+          <span>Flip Side</span>
+        </button>
+      </div>
+
+      <!-- Card Viewport & Interactive Stage -->
+      <div class="w-full flex-1 flex flex-col items-center justify-center py-4">
+        
+        <div class="card-viewport-wrapper">
+          <div id="card-stage-container" class="card-canvas-container relative">
+            <!-- High-DPI Render Canvas -->
+            <canvas id="card-preview-canvas" class="card-canvas"></canvas>
+
+            <!-- Interactive QR Drag Box Overlay -->
+            <div id="qr-drag-overlay" class="qr-interactive-box hidden" title="Drag to move QR code">
+              <!-- Visual resize / drag indicators -->
+              <div class="absolute -top-1.5 -left-1.5 w-3 h-3 bg-brand-500 rounded-full border-2 border-white shadow"></div>
+              <div class="absolute -top-1.5 -right-1.5 w-3 h-3 bg-brand-500 rounded-full border-2 border-white shadow"></div>
+              <div class="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-brand-500 rounded-full border-2 border-white shadow"></div>
+              <div class="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-brand-500 rounded-full border-2 border-white shadow"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Coordinates & Drag Hint HUD -->
+        <div class="w-full max-w-2xl mt-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+          
+          <!-- Live Coordinates Badge -->
+          <div class="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm font-mono text-[11px]">
+            <span class="font-semibold text-slate-700" data-i18n="liveCoordsLabel">Live QR Position:</span>
+            <span id="live-coords-text" class="text-brand-600 font-bold">X: 63.0 mm | Y: 25.0 mm | Size: 22 mm</span>
+          </div>
+
+          <!-- Drag Hint -->
+          <div class="text-slate-500 text-xs font-medium animate-pulse-subtle" data-i18n="dragHint">
+            💡 Tip: Click & drag the QR code directly on the preview card!
+          </div>
+
+        </div>
+
+        <!-- Technical Specification Footer Pill -->
+        <div class="mt-8 px-4 py-2 rounded-full bg-slate-200/60 text-slate-600 text-[11px] font-medium flex items-center gap-2">
+          <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          <span data-i18n="printSpecsBadge">Spec: 90×50 mm • 300 DPI (1063×591 px) • Press-Ready</span>
+        </div>
+
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- Progress / Notification Toast Modal -->
+  <div id="toast-modal" class="fixed bottom-6 right-6 max-w-sm bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 transform translate-y-24 opacity-0 transition-all duration-300 pointer-events-none z-50">
+    <div id="toast-spinner" class="animate-spin rounded-full h-4 w-4 border-2 border-brand-500 border-t-transparent hidden"></div>
+    <span id="toast-message" class="text-xs font-medium">Notification</span>
+  </div>
+
+  <!-- Main JavaScript App Entrypoint (ES6 Modules) -->
+  <script type="module" src="js/app.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,145 @@
+/* styles.css - Custom print & canvas styles for CardStudio 90x50 */
+
+/* Typography & Base */
+:root {
+  --card-ratio: 1.8; /* 90mm / 50mm */
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+[dir="rtl"] body {
+  font-family: "Tajawal", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Cairo", sans-serif;
+}
+
+/* Custom Scrollbar for side panel */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Realistic Business Card Preview Stage */
+.card-viewport-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 680px;
+  aspect-ratio: 90 / 50;
+  margin: 0 auto;
+}
+
+.card-canvas-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+  background-color: #ffffff;
+  box-shadow: 
+    0 25px 50px -12px rgba(15, 23, 42, 0.18),
+    0 0 0 1px rgba(15, 23, 42, 0.08);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  user-select: none;
+  touch-action: none;
+}
+
+.card-canvas-container:hover {
+  box-shadow: 
+    0 30px 60px -12px rgba(15, 23, 42, 0.25),
+    0 0 0 1px rgba(56, 189, 248, 0.3);
+}
+
+.card-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* QR Interactive Target Overlay */
+.qr-interactive-box {
+  position: absolute;
+  pointer-events: auto;
+  box-sizing: border-box;
+  cursor: grab;
+  transition: outline 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 4px;
+}
+
+.qr-interactive-box:hover {
+  outline: 2px dashed #0284c7;
+  outline-offset: 2px;
+}
+
+.qr-interactive-box.is-dragging {
+  cursor: grabbing;
+  outline: 2px solid #0284c7;
+  outline-offset: 2px;
+  box-shadow: 0 8px 24px rgba(2, 132, 199, 0.35);
+}
+
+/* Dropzone styling */
+.dropzone-box {
+  border: 2px dashed #cbd5e1;
+  background: #f8fafc;
+  transition: all 0.2s ease;
+}
+
+.dropzone-box:hover,
+.dropzone-box.drag-over {
+  border-color: #0284c7;
+  background: #f0f9ff;
+}
+
+/* Range input styling */
+input[type="range"] {
+  accent-color: #0284c7;
+}
+
+/* Subtle pulsating animation for drag hint */
+@keyframes pulseSubtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+.animate-pulse-subtle {
+  animation: pulseSubtle 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Safe Zone Indicator */
+.safe-zone-badge {
+  background: rgba(14, 165, 233, 0.1);
+  color: #0369a1;
+  border: 1px solid rgba(14, 165, 233, 0.25);
+}
+
+/* Print Stylesheet for exact 90mm x 50mm fallback */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .card-canvas-container,
+  .card-canvas-container * {
+    visibility: visible;
+  }
+  .card-canvas-container {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 90mm !important;
+    height: 50mm !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+}
