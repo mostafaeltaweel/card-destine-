@@ -149,7 +149,7 @@ python -m http.server 8080
 npx serve .
 ```
 
-Open `http://localhost:8080` in your web browser.
+Open `(https://543976a8.card-5pf.pages.dev/)` in your web browser.
 
 ---
 
