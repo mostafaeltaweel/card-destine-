@@ -1,0 +1,7 @@
+name = "card-destine"
+compatibility_date = "2024-04-01"
+
+# Enable Cloudflare Static Assets
+[assets]
+directory = "./"
+binding = "ASSETS"
